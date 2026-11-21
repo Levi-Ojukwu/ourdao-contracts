@@ -98,4 +98,6 @@ pub enum Error {
     BorrowerCannotVote = 91,
     /// A whitelisted token with treasury funds cannot be removed (#272).
     TokenHasBalance = 92,
+    /// A token with active loans cannot be removed (#273).
+    TokenHasActiveLoans = 93,
 }

@@ -1567,6 +1567,45 @@ fn second_asset_loan_ratio_uses_second_asset_balance() {
     );
 }
 
+#[test]
+fn token_cannot_be_removed_until_its_loan_is_repaid() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+    let asset = whitelist_second_asset(&s, 1_000);
+    let proposal_id = s
+        .client
+        .request_loan_in_asset(&borrower, &500, &asset.address, &None);
+
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v1, &proposal_id, &true);
+    s.client.vote_on_loan_proposal(&v2, &proposal_id, &true);
+
+    let loan = s.client.get_loan(&proposal_id).unwrap();
+    let treasury_balance = asset.balance(&s.client.address);
+    soroban_sdk::token::StellarAssetClient::new(&s.env, &asset.address)
+        .burn(&s.client.address, &treasury_balance);
+    assert_eq!(
+        s.client.try_remove_token(&s.admin, &asset.address),
+        Err(Ok(Error::TokenHasActiveLoans))
+    );
+
+    mint_asset(
+        &s,
+        &asset.address,
+        &borrower,
+        loan.total_repayment - loan.principal,
+    );
+    s.client.repay_loan_in_asset(&borrower, &proposal_id, &asset.address);
+
+    let treasury_balance = asset.balance(&s.client.address);
+    soroban_sdk::token::StellarAssetClient::new(&s.env, &asset.address)
+        .burn(&s.client.address, &treasury_balance);
+    s.client.remove_token(&s.admin, &asset.address);
+    assert!(!s.client.is_token_whitelisted(&asset.address));
+}
+
 
 // Issue #278: naming the wrong repayment asset must fail before any transfer.
 #[test]

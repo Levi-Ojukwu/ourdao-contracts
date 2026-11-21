@@ -90,6 +90,8 @@ pub(crate) enum DataKey {
     /// Principal still owed on `Active` loans denominated in this asset.
     /// Absent means zero.
     OutstandingPrincipal(Address),
+    /// Number of active loans denominated in this asset. Absent means zero.
+    ActiveLoansInAsset(Address),
     /// Addresses with indexed pending token additions, in proposal order.
     PendingTokenAdditions,
 }
@@ -784,6 +786,36 @@ pub fn adjust_outstanding_principal(env: &Env, asset: &Address, delta: i128) {
     let key = DataKey::OutstandingPrincipal(asset.clone());
     let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
     env.storage().persistent().set(&key, &(current + delta));
+    extend_persistent(env, &key);
+}
+
+/// Number of active loans denominated in `asset`.
+pub fn get_active_loans_in_asset(env: &Env, asset: &Address) -> u32 {
+    let key = DataKey::ActiveLoansInAsset(asset.clone());
+    match env.storage().persistent().get(&key) {
+        Some(count) => {
+            extend_persistent(env, &key);
+            count
+        }
+        None => 0,
+    }
+}
+
+pub fn increment_active_loans_in_asset(env: &Env, asset: &Address) {
+    let key = DataKey::ActiveLoansInAsset(asset.clone());
+    let current = get_active_loans_in_asset(env, asset);
+    env.storage()
+        .persistent()
+        .set(&key, &current.saturating_add(1));
+    extend_persistent(env, &key);
+}
+
+pub fn decrement_active_loans_in_asset(env: &Env, asset: &Address) {
+    let key = DataKey::ActiveLoansInAsset(asset.clone());
+    let current = get_active_loans_in_asset(env, asset);
+    env.storage()
+        .persistent()
+        .set(&key, &current.saturating_sub(1));
     extend_persistent(env, &key);
 }
 
