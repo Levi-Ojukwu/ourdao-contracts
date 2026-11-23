@@ -4,7 +4,7 @@ use crate::error::Error;
 use crate::storage;
 use crate::types::{
     Loan, LoanPolicy, LoanProposal, LoanStatus, LoanTerms, MemberStatus, ProposalPhase,
-    ProposalStatus, BASIS_POINTS,
+    ProposalStatus, BASIS_POINTS, ONE,
 };
 use crate::util;
 
@@ -41,8 +41,9 @@ fn quote_terms(env: &Env, amount: i128, treasury: i128) -> Result<LoanTerms, Err
     let loan_ratio = if treasury > 0 {
         amount
             .checked_mul(BASIS_POINTS)
-            .map(|v| util::ceil_div_nonnegative(v, treasury))
-            .unwrap_or(BASIS_POINTS)
+            .and_then(|v| v.checked_add(treasury - ONE))
+            .and_then(|v| v.checked_div(treasury))
+            .ok_or(Error::ArithmeticOverflow)?
             .min(BASIS_POINTS)
     } else {
         BASIS_POINTS
@@ -50,24 +51,25 @@ fn quote_terms(env: &Env, amount: i128, treasury: i128) -> Result<LoanTerms, Err
     let spread = (policy.max_interest_rate - policy.min_interest_rate) as i128;
     let added_rate = loan_ratio
         .checked_mul(spread)
-        .map(|v| util::ceil_div_nonnegative(v, BASIS_POINTS))
-        .unwrap_or(spread);
+        .and_then(|v| v.checked_add(BASIS_POINTS - ONE))
+        .and_then(|v| v.checked_div(BASIS_POINTS))
+        .ok_or(Error::ArithmeticOverflow)?;
     let rate = (policy.min_interest_rate as i128)
         .checked_add(added_rate)
-        .unwrap_or(policy.max_interest_rate as i128)
+        .ok_or(Error::ArithmeticOverflow)?
         .min(policy.max_interest_rate as i128);
 
     // Member debt: ceil-division rounds up to favour the treasury.
     let interest = if amount > 0 && rate > 0 {
         amount
             .checked_mul(rate)
-            .and_then(|v| v.checked_add(BASIS_POINTS - 1))
+            .and_then(|v| v.checked_add(BASIS_POINTS - ONE))
             .and_then(|v| v.checked_div(BASIS_POINTS))
-            .unwrap_or(i128::MAX - amount)
+            .ok_or(Error::ArithmeticOverflow)?
     } else {
         0
     };
-    let total_repayment = amount.checked_add(interest).unwrap_or(i128::MAX);
+    let total_repayment = amount.checked_add(interest).ok_or(Error::ArithmeticOverflow)?;
 
     Ok(LoanTerms {
         interest_rate: rate as u32,
@@ -397,8 +399,15 @@ fn vote_on_loan_proposal_internal(
         }
     } else if proposal.status == ProposalStatus::Pending {
         let remaining = proposal.active_members.saturating_sub(proposal.votes_cast);
-        let max_remaining = remaining as i128 * (1 + util::MAX_STAKE_BONUS);
-        if proposal.for_votes + max_remaining < required {
+        let vote_cap = ONE.checked_add(util::MAX_STAKE_BONUS).ok_or(Error::ArithmeticOverflow)?;
+        let max_remaining = (remaining as i128)
+            .checked_mul(vote_cap)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let max_possible = proposal
+            .for_votes
+            .checked_add(max_remaining)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if max_possible < required {
             proposal.status = ProposalStatus::Rejected;
             proposal.phase = ProposalPhase::Expired;
             env.events().publish(
@@ -618,7 +627,10 @@ fn repay_loan_internal(
     }
     let principal_before = principal_outstanding(&loan);
 
-    let mut outstanding = loan.total_repayment - loan.amount_repaid;
+    let mut outstanding = loan
+        .total_repayment
+        .checked_sub(loan.amount_repaid)
+        .ok_or(Error::ArithmeticOverflow)?;
 
     let now = env.ledger().timestamp();
     if now > loan.due_time {
@@ -627,15 +639,15 @@ fn repay_loan_internal(
         let penalty = if outstanding > 0 && policy.default_penalty_bps > 0 {
             outstanding
                 .checked_mul(policy.default_penalty_bps as i128)
-                .and_then(|v| v.checked_add(crate::types::BASIS_POINTS - 1))
+                .and_then(|v| v.checked_add(BASIS_POINTS - ONE))
                 .and_then(|v| v.checked_div(crate::types::BASIS_POINTS))
-                .unwrap_or(0)
+                .ok_or(Error::ArithmeticOverflow)?
         } else {
             0
         };
-        outstanding += penalty;
-        loan.total_repayment += penalty;
-        loan.principal += penalty; // Keep penalty in treasury, don't distribute as interest
+        outstanding = outstanding.checked_add(penalty).ok_or(Error::ArithmeticOverflow)?;
+        loan.total_repayment = loan.total_repayment.checked_add(penalty).ok_or(Error::ArithmeticOverflow)?;
+        loan.principal = loan.principal.checked_add(penalty).ok_or(Error::ArithmeticOverflow)?; // Keep penalty in treasury, don't distribute as interest
     }
 
     let amount = amount.unwrap_or(outstanding);
@@ -648,13 +660,19 @@ fn repay_loan_internal(
     // Interest-first split: how much of the loan's total interest was
     // already covered before this payment vs. after it. The difference is
     // the interest component of *this* payment; everything else is principal.
-    let interest_total = loan.total_repayment - loan.principal;
+    let interest_total = loan
+        .total_repayment
+        .checked_sub(loan.principal)
+        .ok_or(Error::ArithmeticOverflow)?;
     let interest_before = loan.amount_repaid.min(interest_total);
-    loan.amount_repaid += amount;
+    loan.amount_repaid = loan.amount_repaid.checked_add(amount).ok_or(Error::ArithmeticOverflow)?;
     let interest_after = loan.amount_repaid.min(interest_total);
     let interest_component = interest_after - interest_before;
 
-    let remaining = loan.total_repayment - loan.amount_repaid;
+    let remaining = loan
+        .total_repayment
+        .checked_sub(loan.amount_repaid)
+        .ok_or(Error::ArithmeticOverflow)?;
     if remaining == 0 {
         loan.status = LoanStatus::Repaid;
         if let Some(mut member) = storage::get_member(env, &borrower) {
@@ -666,13 +684,16 @@ fn repay_loan_internal(
     }
     storage::set_loan(env, &loan);
     // Net of any overdue penalty booked as principal above.
+    let principal_delta = principal_outstanding(&loan)
+        .checked_sub(principal_before)
+        .ok_or(Error::ArithmeticOverflow)?;
     storage::adjust_outstanding_principal(
         env,
         &asset,
-        principal_outstanding(&loan) - principal_before,
+        principal_delta,
     );
 
-    distribute_interest(env, interest_component, &asset);
+    distribute_interest(env, interest_component, &asset)?;
     // External token interaction last; failed transfers revert all accounting effects.
     util::token_client_for(env, &asset).transfer(&borrower, util::contract_address(env), &amount);
 
@@ -765,7 +786,7 @@ pub fn mark_loan_defaulted(env: &Env, loan_id: u32) -> Result<(), Error> {
             member
                 .contribution
                 .checked_mul(loan.default_penalty_bps as i128)
-                .and_then(|v| v.checked_add(BASIS_POINTS - 1))
+                .and_then(|v| v.checked_add(BASIS_POINTS - ONE))
                 .and_then(|v| v.checked_div(BASIS_POINTS))
                 .unwrap_or(member.contribution)
                 .min(member.contribution)
@@ -838,16 +859,18 @@ pub(crate) fn principal_outstanding(loan: &Loan) -> i128 {
 /// `asset` is the asset the interest was paid in. It is carried on the
 /// `interest` event so indexers can attribute it to the right treasury.
 #[allow(deprecated)]
-pub(crate) fn distribute_interest(env: &Env, interest: i128, asset: &Address) {
+pub(crate) fn distribute_interest(env: &Env, interest: i128, asset: &Address) -> Result<(), Error> {
     let active = storage::get_active_members(env) as i128;
     if interest <= 0 || active == 0 {
-        return;
+        return Ok(());
     }
 
     storage::record_yield_asset(env, asset);
 
     // #60 — Carry the sub-divisible remainder forward instead of silently discarding.
-    let total_interest = interest + storage::get_yield_remainder(env, asset);
+    let total_interest = interest
+        .checked_add(storage::get_yield_remainder(env, asset))
+        .ok_or(Error::ArithmeticOverflow)?;
     let per_member = total_interest / active;
     let remainder = total_interest % active;
 
@@ -855,7 +878,8 @@ pub(crate) fn distribute_interest(env: &Env, interest: i128, asset: &Address) {
 
     if per_member > 0 {
         let current = storage::get_yield_accumulator(env, asset);
-        storage::set_yield_accumulator(env, asset, current + per_member);
+        let updated = current.checked_add(per_member).ok_or(Error::ArithmeticOverflow)?;
+        storage::set_yield_accumulator(env, asset, updated);
     }
 
     // Unconditionally publish the event so the indexer sees the interest paid
@@ -863,4 +887,5 @@ pub(crate) fn distribute_interest(env: &Env, interest: i128, asset: &Address) {
         (crate::events::INTEREST,),
         (interest, active, asset.clone()),
     );
+    Ok(())
 }

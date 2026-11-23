@@ -3,7 +3,7 @@ use soroban_sdk::{Address, Env, String};
 use crate::error::Error;
 use crate::privacy;
 use crate::storage;
-use crate::types::{ProposalStatus, TreasuryProposal};
+use crate::types::{ProposalStatus, TreasuryProposal, ONE};
 use crate::util;
 
 // `env.events().publish` is deprecated in soroban-sdk in favour of
@@ -165,8 +165,17 @@ pub fn tally(
         }
     } else {
         let remaining = proposal.active_members.saturating_sub(proposal.votes_cast);
-        let max_remaining = remaining as i128 * (1 + util::MAX_STAKE_BONUS);
-        if proposal.for_votes + max_remaining < required {
+        let vote_cap = ONE
+            .checked_add(util::MAX_STAKE_BONUS)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let max_remaining = (remaining as i128)
+            .checked_mul(vote_cap)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let max_possible = proposal
+            .for_votes
+            .checked_add(max_remaining)
+            .ok_or(Error::ArithmeticOverflow)?;
+        if max_possible < required {
             proposal.status = ProposalStatus::Rejected;
             env.events().publish(
                 (crate::events::TRE_REJ,),

@@ -59,7 +59,7 @@ pub(crate) enum DataKey {
     YieldAccumulator,
     YieldRemainder,
     MemberYieldSnapshot(Address),
-    // native-swap modules
+    // staking, registry, and document modules
     Doc(ProposalKind, u32),
     Name(String),
     NameOf(Address),
@@ -503,7 +503,7 @@ pub fn set_yield_snapshot(env: &Env, addr: &Address, asset: &Address, value: i12
     extend_persistent(env, &key);
 }
 
-// ---------- native-swap module accessors ----------
+// ---------- staking, registry, and document module accessors ----------
 
 pub fn get_doc(env: &Env, kind: ProposalKind, id: u32) -> Option<soroban_sdk::Bytes> {
     let key = DataKey::Doc(kind, id);

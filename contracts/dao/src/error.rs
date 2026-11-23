@@ -45,7 +45,7 @@ pub enum Error {
     // ---- treasury ----
     TreasuryProposalNotFound = 50,
 
-    // ---- native-swap modules ----
+    // ---- staking, registry, and documents ----
     NameTaken = 60,
     /// Reserved: never returned. No contract code path produces it; kept
     /// because codes are append-only public ABI (#252).
@@ -111,4 +111,6 @@ pub enum Error {
     NotAdmin2 = 95,
     /// Batch vote call exceeded the maximum number of votes allowed per call.
     TooManyVotesInBatch = 96,
+    /// Checked `i128` arithmetic overflowed; the operation was rejected.
+    ArithmeticOverflow = 97,
 }

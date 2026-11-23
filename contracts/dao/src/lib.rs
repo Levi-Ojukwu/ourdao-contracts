@@ -75,26 +75,39 @@ impl OurDao {
         )
     }
 
+    /// Adds an admin. The caller must be an existing admin and authorize the
+    /// call. May emit an admin-change event and returns an authorization or
+    /// configuration error when the change is not allowed.
     pub fn add_admin(env: Env, caller: Address, admin: Address) -> Result<(), Error> {
         admin::add_admin(&env, caller, admin)
     }
 
+    /// Removes an admin subject to the remaining-admin and signer rules.
+    /// The caller must be an admin and authorize the call.
     pub fn remove_admin(env: Env, caller: Address, admin: Address) -> Result<(), Error> {
         admin::remove_admin(&env, caller, admin)
     }
 
+    /// Assigns the pauser role. The caller must authorize and be an admin.
+    /// May return an authorization or role-state error.
     pub fn set_pauser(env: Env, caller: Address, pauser: Address) -> Result<(), Error> {
         admin::set_pauser(&env, caller, pauser)
     }
 
+    /// Revokes the current pauser role. The caller must be an admin and
+    /// authorize the call.
     pub fn revoke_pauser(env: Env, caller: Address) -> Result<(), Error> {
         admin::revoke_pauser(&env, caller)
     }
 
+    /// Updates the governance consensus threshold. The caller must be an admin
+    /// and authorize the call; invalid thresholds return `InvalidThreshold`.
     pub fn set_consensus_threshold(env: Env, caller: Address, threshold: u32) -> Result<(), Error> {
         admin::set_consensus_threshold(&env, caller, threshold)
     }
 
+    /// Submits a timelocked loan-policy update. Requires admin authorization
+    /// and emits a policy proposal event.
     pub fn propose_policy_update(
         env: Env,
         caller: Address,
@@ -103,32 +116,49 @@ impl OurDao {
         admin::propose_policy_update(&env, caller, policy)
     }
 
+    /// Executes a mature pending policy update. Requires admin authorization
+    /// and returns timelock or policy errors when not eligible.
     pub fn execute_policy_update(env: Env, caller: Address) -> Result<(), Error> {
         admin::execute_policy_update(&env, caller)
     }
 
+    /// Cancels a pending policy update. Requires admin authorization and emits
+    /// a policy cancellation event.
     pub fn cancel_policy_update(env: Env, caller: Address) -> Result<(), Error> {
         admin::cancel_policy_update(&env, caller)
     }
 
+    /// Directly sets the loan policy. Requires admin authorization and returns
+    /// `InvalidLoanPolicy` for invalid values.
     pub fn set_loan_policy(env: Env, caller: Address, policy: LoanPolicy) -> Result<(), Error> {
         admin::set_policy(&env, caller, policy)
     }
 
+    /// Pauses contract state changes. The pauser or an allowed caller must
+    /// authorize the call and emit the pause event on success.
     pub fn pause(env: Env, caller: Address) -> Result<(), Error> {
         admin::pause(&env, caller)
     }
 
+    /// Resumes contract state changes. The pauser or an allowed caller must
+    /// authorize the call.
     pub fn unpause(env: Env, caller: Address) -> Result<(), Error> {
         admin::unpause(&env, caller)
     }
 
     // ==================== membership ====================
 
+    /// Registers `member`, collects the membership fee, and grants active
+    /// member status. `member` must authorize; returns `AlreadyMember`,
+    /// `InsufficientTreasury`, or transfer/configuration errors when applicable
+    /// and emits the member-joined event.
     pub fn register_member(env: Env, member: Address) -> Result<(), Error> {
         membership::register_member(&env, member)
     }
 
+    /// Exits `member`, settling stake and accrued yield and reducing their
+    /// contribution share. `member` must authorize and have no active loan.
+    /// Returns membership, balance, or arithmetic errors and emits exit events.
     pub fn exit_dao(env: Env, member: Address) -> Result<(), Error> {
         membership::exit_dao(&env, member)
     }
@@ -148,12 +178,17 @@ impl OurDao {
         membership::claim_rewards_in_asset(&env, member, asset)
     }
 
+    /// Delegates `delegator`'s voting power to `delegatee`. `delegator` must
+    /// authorize; invalid targets and authorization failures return errors.
     pub fn delegate_vote(env: Env, delegator: Address, delegatee: Address) -> Result<(), Error> {
         membership::delegate_vote(&env, delegator, delegatee)
     }
 
     // ==================== loans ====================
 
+    /// Creates a loan proposal in the base treasury asset. `borrower` must
+    /// authorize and satisfy member, loan-policy, and treasury eligibility;
+    /// emits a loan proposal event on success.
     pub fn request_loan(
         env: Env,
         borrower: Address,
@@ -174,6 +209,8 @@ impl OurDao {
         loans::request_loan_in_asset(&env, borrower, amount, asset, metadata_cid)
     }
 
+    /// Changes the amount or metadata of a borrower's loan proposal while it
+    /// remains in its editing window. `borrower` must authorize.
     pub fn edit_loan_proposal(
         env: Env,
         borrower: Address,
@@ -194,6 +231,9 @@ impl OurDao {
         loans::cancel_loan_proposal(&env, borrower, proposal_id)
     }
 
+    /// Casts `voter`'s support or rejection vote on a loan proposal.
+    /// `voter` must authorize and be eligible; duplicate, ended, or invalid
+    /// votes return errors and emit the loan-vote event on success.
     pub fn vote_on_loan_proposal(
         env: Env,
         voter: Address,
@@ -203,6 +243,9 @@ impl OurDao {
         loans::vote_on_loan_proposal(&env, voter, proposal_id, support)
     }
 
+    /// Records multiple loan proposal votes atomically for `voter`. `voter`
+    /// must authorize; any invalid vote aborts the batch and emits no partial
+    /// vote events.
     pub fn vote_batch(
         env: Env,
         voter: Address,
@@ -217,6 +260,9 @@ impl OurDao {
         loans::disburse_approved_loan(&env, proposal_id)
     }
 
+    /// Repays the outstanding balance of a base-asset loan. `borrower` must
+    /// authorize; invalid, inactive, or insufficient-payment conditions return
+    /// errors and emit a loan-repayment event on success.
     pub fn repay_loan(env: Env, borrower: Address, loan_id: u32) -> Result<(), Error> {
         loans::repay_loan(&env, borrower, loan_id)
     }
@@ -256,6 +302,9 @@ impl OurDao {
 
     // ==================== treasury ====================
 
+    /// Creates a treasury-withdrawal proposal in the base asset. `proposer`
+    /// must authorize and emit the proposal event; invalid amount or state
+    /// returns an error.
     pub fn propose_treasury_withdrawal(
         env: Env,
         proposer: Address,
@@ -290,6 +339,9 @@ impl OurDao {
         )
     }
 
+    /// Casts `voter`'s support or rejection vote on a treasury proposal.
+    /// `voter` must authorize and satisfy electorate rules; duplicate or ended
+    /// votes return errors and emit a treasury-vote event.
     pub fn vote_on_treasury_proposal(
         env: Env,
         voter: Address,
@@ -309,6 +361,9 @@ impl OurDao {
         treasury::cancel_treasury_proposal(&env, proposer, proposal_id)
     }
 
+    /// Permissionlessly expires a treasury proposal after its voting window.
+    /// Returns `NotInVotingPhase` for an active proposal and emits an expiry
+    /// event on transition.
     pub fn expire_treasury_proposal(env: Env, proposal_id: u32) -> Result<(), Error> {
         treasury::expire_treasury_proposal(&env, proposal_id)
     }
@@ -322,37 +377,51 @@ impl OurDao {
     // ==================== maintenance ====================
 
     #[allow(deprecated)]
+    /// Extends the contract instance TTL. Permissionless; emits `TTL_BUMPED`.
     pub fn bump_dao_ttl(env: Env) {
         storage::extend_instance(&env);
         env.events().publish((events::TTL_BUMPED,), ());
     }
 
-    // ==================== native swap: staking ====================
+    // ==================== staking ====================
 
+    /// Stakes base treasury assets to increase `member`'s voting weight.
+    /// `member` must authorize and have sufficient spendable balance; returns
+    /// stake/amount errors and emits the stake event.
     pub fn stake(env: Env, member: Address, amount: i128) -> Result<(), Error> {
         staking::stake(&env, member, amount)
     }
 
+    /// Releases staked base treasury assets from `member`. `member` must
+    /// authorize and have enough stake; emits the unstake event.
     pub fn unstake(env: Env, member: Address, amount: i128) -> Result<(), Error> {
         staking::unstake(&env, member, amount)
     }
 
-    // ==================== native swap: name registry ====================
+    // ==================== name registry ====================
 
+    /// Registers or updates `name` for `owner`. `owner` must authorize and the
+    /// name must be valid and available; emits a name-registration event.
     pub fn register_name(env: Env, owner: Address, name: String) -> Result<(), Error> {
         registry::register_name(&env, owner, name)
     }
 
+    /// Resolves a registered name to its owner address. Read-only; returns
+    /// `None` when unregistered and `NotInitialized` if the DAO is uninitialized.
     pub fn resolve_name(env: Env, name: String) -> Result<Option<Address>, Error> {
         registry::resolve_name(&env, name)
     }
 
+    /// Returns the name registered to `owner`, or `None` when none is
+    /// registered. Read-only; may return `NotInitialized`.
     pub fn name_of(env: Env, owner: Address) -> Result<Option<String>, Error> {
         registry::name_of(&env, owner)
     }
 
-    // ==================== native swap: commit-reveal voting ====================
+    // ==================== commit-reveal voting ====================
 
+    /// Stores a hidden treasury-vote commitment. `voter` must authorize and
+    /// commit during the configured window; emits a commitment event.
     pub fn commit_treasury_vote(
         env: Env,
         voter: Address,
@@ -362,6 +431,9 @@ impl OurDao {
         privacy::commit_vote(&env, voter, proposal_id, commitment)
     }
 
+    /// Reveals a previously committed treasury vote. `voter` must authorize
+    /// and provide the matching commitment inputs; emits the treasury-vote
+    /// event after tallying.
     pub fn reveal_treasury_vote(
         env: Env,
         voter: Address,
@@ -389,8 +461,11 @@ impl OurDao {
         privacy::get_commit_reveal_window(&env, proposal_id)
     }
 
-    // ==================== native swap: content-hash docs ====================
+    // ==================== content-hash documents ====================
 
+    /// Attaches a content hash to a proposal. The caller must be the
+    /// authorized proposer/borrower and the document payload must be valid;
+    /// emits the document event.
     pub fn attach_document(
         env: Env,
         caller: Address,
@@ -401,6 +476,8 @@ impl OurDao {
         docs::attach_document(&env, caller, kind, proposal_id, content_hash)
     }
 
+    /// Returns the content hash attached to a proposal, or `None` if absent.
+    /// Read-only.
     pub fn get_document(
         env: Env,
         kind: ProposalKind,
@@ -416,6 +493,7 @@ impl OurDao {
     // lookups (`get_member`, `get_loan`, ...) keep returning `None`; use
     // `is_initialized` to tell a missing record from a wrong address.
 
+    /// Returns the member record for `address`, or `None` if unregistered.
     pub fn get_member(env: Env, address: Address) -> Option<Member> {
         storage::get_member(&env, &address)
     }
@@ -440,45 +518,56 @@ impl OurDao {
         membership::member_overview(&env, &member)
     }
 
+    /// Returns a loan by id, or `None` if it does not exist.
     pub fn get_loan(env: Env, loan_id: u32) -> Option<Loan> {
         storage::get_loan(&env, loan_id)
     }
 
+    /// Returns a loan proposal with any expired phase refreshed from ledger
+    /// time, or `None` if absent.
     pub fn get_loan_proposal(env: Env, proposal_id: u32) -> Option<LoanProposal> {
         storage::get_loan_proposal(&env, proposal_id).map(|p| loans::refresh_phase(&env, p))
     }
 
+    /// Returns a treasury proposal by id, or `None` if absent.
     pub fn get_treasury_proposal(env: Env, proposal_id: u32) -> Option<TreasuryProposal> {
         storage::get_treasury_proposal(&env, proposal_id)
     }
 
+    /// Returns the next loan-proposal sequence value as the proposal count.
     pub fn get_loan_proposal_count(env: Env) -> u32 {
         storage::get_proposal_count(&env, storage::DataKey::NextProposalId)
     }
 
+    /// Returns the next treasury-proposal sequence value as the proposal count.
     pub fn get_treasury_proposal_count(env: Env) -> u32 {
         storage::get_proposal_count(&env, storage::DataKey::NextTreasuryId)
     }
 
+    /// Returns the active loan policy. Returns `NotInitialized` before setup.
     pub fn get_loan_policy(env: Env) -> Result<LoanPolicy, Error> {
         util::require_initialized(&env)?;
         storage::get_policy(&env)
     }
 
+    /// Returns the pending timelocked policy update, or `None` if none exists.
     pub fn get_pending_policy_update(env: Env) -> Option<PendingPolicyUpdate> {
         admin::get_pending_policy_update(&env)
     }
 
+    /// Returns the current admin set. Returns `NotInitialized` before setup.
     pub fn get_admins(env: Env) -> Result<Vec<Address>, Error> {
         util::require_initialized(&env)?;
         storage::get_admins(&env)
     }
 
+    /// Reports whether `address` is an admin. Returns `NotInitialized` before setup.
     pub fn is_admin(env: Env, address: Address) -> Result<bool, Error> {
         util::require_initialized(&env)?;
         Ok(util::is_admin(&env, &address))
     }
 
+    /// Reports whether `address` is an active registered member.
     pub fn is_member(env: Env, address: Address) -> bool {
         matches!(
             storage::get_member(&env, &address),
@@ -492,6 +581,8 @@ impl OurDao {
         loans::is_eligible_for_loan(&env, &member)
     }
 
+    /// Returns the spendable base treasury balance. Returns
+    /// `NotInitialized` before setup.
     pub fn get_treasury_balance(env: Env) -> Result<i128, Error> {
         util::require_initialized(&env)?;
         Ok(util::treasury_balance(&env))
@@ -517,19 +608,24 @@ impl OurDao {
         })
     }
 
+    /// Returns the lifetime number of addresses that have joined the DAO.
     pub fn get_total_members(env: Env) -> u32 {
         storage::get_total_members(&env)
     }
 
+    /// Returns the current number of active members.
     pub fn get_active_members(env: Env) -> u32 {
         storage::get_active_members(&env)
     }
 
+    /// Returns the governance consensus threshold in basis points.
+    /// Returns `NotInitialized` before setup.
     pub fn get_consensus_threshold(env: Env) -> Result<u32, Error> {
         util::require_initialized(&env)?;
         storage::get_threshold(&env)
     }
 
+    /// Returns the base treasury asset. Returns `NotInitialized` before setup.
     pub fn get_token(env: Env) -> Result<Address, Error> {
         util::require_initialized(&env)?;
         storage::get_token(&env)
@@ -604,6 +700,7 @@ impl OurDao {
         storage::get_pending_token_additions(&env)
     }
 
+    /// Reports whether contract state changes are currently paused.
     pub fn is_paused(env: Env) -> bool {
         storage::is_paused(&env)
     }
@@ -616,6 +713,7 @@ impl OurDao {
         String::from_str(&env, env!("CARGO_PKG_VERSION"))
     }
 
+    /// Returns `member`'s current base-asset stake balance.
     pub fn get_stake(env: Env, member: Address) -> i128 {
         storage::get_stake(&env, &member)
     }
@@ -637,12 +735,18 @@ impl OurDao {
         util::get_max_stake_bonus()
     }
 
-    pub fn get_pending_yield(env: Env, member: Address) -> i128 {
+    /// Returns `member`'s unclaimed base-asset yield. No authorization is
+    /// required for this read; it may return `ArithmeticOverflow`.
+    pub fn get_pending_yield(env: Env, member: Address) -> Result<i128, Error> {
         membership::compute_pending_yield(&env, &member)
     }
 
     /// Returns `member`'s unclaimed yield denominated in `asset`.
-    pub fn get_pending_yield_in_asset(env: Env, member: Address, asset: Address) -> i128 {
+    pub fn get_pending_yield_in_asset(
+        env: Env,
+        member: Address,
+        asset: Address,
+    ) -> Result<i128, Error> {
         membership::compute_pending_yield_in_asset(&env, &member, &asset)
     }
 
@@ -681,9 +785,12 @@ impl OurDao {
         loans::calculate_loan_terms(&env, amount)
     }
 
+    /// Calculates `member`'s contribution-proportional share of the base
+    /// treasury. Returns zero for no active record and `ArithmeticOverflow`
+    /// if the proportional calculation cannot be represented.
     pub fn calculate_exit_share(env: Env, member: Address) -> Result<i128, Error> {
         util::require_initialized(&env)?;
-        Ok(membership::calculate_exit_share(&env, &member))
+        membership::calculate_exit_share(&env, &member)
     }
 
     // ==================== paginated list views (#334 / #335) ====================
@@ -746,6 +853,8 @@ impl OurDao {
         migration::seed_members(&env, caller, members)
     }
 
+    /// Seeds historical stake records. Admin-only before `lock_seeding`;
+    /// returns `SeedingLocked` after migration closes and emits no event.
     pub fn seed_stakes(
         env: Env,
         caller: Address,
@@ -754,6 +863,8 @@ impl OurDao {
         migration::seed_stakes(&env, caller, stakes)
     }
 
+    /// Seeds historical pending-yield accumulators. Admin-only before
+    /// `lock_seeding`; returns `SeedingLocked` after migration closes.
     pub fn seed_pending_yield(
         env: Env,
         caller: Address,
@@ -762,14 +873,20 @@ impl OurDao {
         migration::seed_pending_yield(&env, caller, yields)
     }
 
+    /// Seeds historical loan records. Admin-only before `lock_seeding`;
+    /// returns `SeedingLocked` after migration closes.
     pub fn seed_loans(env: Env, caller: Address, loans: Vec<Loan>) -> Result<(), Error> {
         migration::seed_loans(&env, caller, loans)
     }
 
+    /// Seeds historical name-registry records. Admin-only before
+    /// `lock_seeding`; returns `SeedingLocked` after migration closes.
     pub fn seed_names(env: Env, caller: Address, names: Vec<SeedNameEntry>) -> Result<(), Error> {
         migration::seed_names(&env, caller, names)
     }
 
+    /// Seeds historical content-hash documents. Admin-only before
+    /// `lock_seeding`; returns `SeedingLocked` after migration closes.
     pub fn seed_docs(env: Env, caller: Address, docs: Vec<SeedDocEntry>) -> Result<(), Error> {
         migration::seed_docs(&env, caller, docs)
     }
