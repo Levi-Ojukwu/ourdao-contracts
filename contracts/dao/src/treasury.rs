@@ -303,7 +303,15 @@ pub fn expire_treasury_proposal(env: &Env, proposal_id: u32) -> Result<(), Error
         return Err(Error::NotInVotingPhase); // Re-using error
     }
 
-    if env.ledger().timestamp() > proposal.created_at + proposal.voting_period {
+    // A private proposal's voting window is its full commit + reveal window,
+    // the same boundary `tally` enforces. Expiring at `voting_period` alone
+    // would lock committed voters out of revealing (#434).
+    let voting_end = if proposal.private {
+        privacy::commit_reveal_window(&proposal).1
+    } else {
+        proposal.created_at + proposal.voting_period
+    };
+    if env.ledger().timestamp() > voting_end {
         proposal.status = ProposalStatus::Expired;
         storage::set_treasury_proposal(env, &proposal);
         env.events().publish(

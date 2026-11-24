@@ -4,6 +4,9 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 
 ## [Unreleased]
 
+### Fixed
+- `expire_treasury_proposal` now waits for a private proposal's full commit + reveal window (`created_at + voting_period * 2`), the same boundary `tally` enforces, so committed votes can no longer be locked out of revealing (#434).
+
 ## [0.2.0] - 2026-11-21
 
 ### Changed
