@@ -478,6 +478,14 @@ invocation metering, in a 10-member DAO. Regenerate with `make costs`
 | `is_eligible_for_loan` | 956,945 | 1,283 | 3 | 0 | 0 | 0 | 2,393 |
 | `get_treasury_balance` | 986,734 | 1,299 | 4 | 0 | 0 | 0 | 2,467 |
 
+/// Owner of the proposal, or None if it does not exist. One storage read.
+fn proposal_owner_opt(env: &Env, kind: &ProposalKind, id: u64) -> Option<Address> {
+    match kind {
+        ProposalKind::Loan => storage::get_loan_proposal(env, id).map(|p| p.owner),
+        ProposalKind::Treasury => storage::get_treasury_proposal(env, id).map(|p| p.owner),
+    }
+}
+
 How to read it:
 
 - **Fees** use the pubnet fee snapshot built into `soroban-sdk` 26 (1 XLM =
