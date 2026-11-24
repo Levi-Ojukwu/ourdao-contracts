@@ -45,8 +45,7 @@ This repository is one of three that make up OurDAO:
 - **Lending** — members request loans that go through a fixed editable draft phase, then member voting weighted by stake-boosted voting power. On reaching the consensus threshold the loan is automatically approved and the principal disbursed from the treasury — no separate "execute" step. Interest is computed from a loan-size-relative-to-treasury curve, clamped to the policy's min/max rate. Repaying a loan returns the principal to the treasury and splits the interest across all active members as claimable yield.
 - **Loan defaults** — an overdue loan (past `due_time` plus a configurable grace period) can be marked defaulted by **anyone**, not just an admin — an on-chain keeper pattern. Defaulting slashes a policy-defined share of the borrower's treasury claim and frees their `has_active_loan` flag, so they can still exit the DAO with their reduced share or borrow again after the normal cooldown. This closes what was previously the DAO's most notable functional gap: prior to this, an overdue loan had zero on-chain consequence.
 - **Treasury** — any member can propose a withdrawal to any destination; execution requires a higher (60%) consensus than loan approval, reflecting the larger blast radius of moving treasury funds arbitrarily.
-- **Quorum is fixed when a proposal is created.** Loan and treasury proposals store the active-member count at creation (`active_members`), and both the approval bar (`ceil(active_members × threshold / 10_000)`) and the early-rejection bound are computed from it for the proposal's whole life. Members exiting mid-vote cannot lower the bar, and members joining mid-vote cannot raise it. The electorate is fixed too: a member who joined, or rejoined, after a proposal was created gets `JoinedAfterProposal` (93) if they try to vote, commit or reveal on it, because counting their vote against a bar that never included them would let new sign-ups decide it. They vote normally on proposals created after they joined. Membership is timestamped by ledger time, so a member who joins in the same ledger a proposal is created in is part of its electorate.
-- **Safety** — admin pause/unpause blocks all state-changing operations instantly (except loan repayments, which remain available to prevent forcing borrowers into default), and extensive view functions let any client inspect full DAO state without needing an indexer for real-time reads.
+- **Safety** — admins can pause and unpause the DAO, and can assign or revoke one emergency pauser. The pauser can only trigger a pause; only an admin can unpause unless the pauser is independently an admin. Pausing blocks ordinary state-changing operations except loan repayments, which remain available to prevent forcing borrowers into default. See [Pause functionality](docs/PAUSE_FUNCTIONALITY.md) for details.
 
 ### Yield and exit-share rules
 
@@ -123,168 +122,233 @@ contracts/dao/
 
 ## Public interface (ABI)
 
-All entrypoints are on the `OurDao` contract (`lib.rs`). Errors are the numeric [`Error`](#error-codes) codes below.
+All public entrypoints and views on `OurDao` are listed below in source order, generated from the `pub fn` declarations in [`lib.rs`](contracts/dao/src/lib.rs). Run `scripts/generate-abi.sh --markdown` to print the table. Errors are the numeric [`Error`](#error-codes) codes below.
 
-**Lifecycle / governance**
-
-| Method | Description |
-|---|---|
-| `initialize(admins, consensus_threshold, membership_fee, token, policy)` | One-time setup. |
-| `add_admin(caller, admin)` / `remove_admin(caller, admin)` | Admin-only. The last admin can never be removed. |
-| `set_consensus_threshold(caller, threshold)` | Admin-only, basis points. |
-| `set_loan_policy(caller, policy)` | Admin-only. |
-| `execute_policy_update(caller)` / `cancel_policy_update(caller)` / `try_execute_policy_update()` | Admin-only 48h timelock policy update execution and cancellation. |
-| `pause(caller)` / `unpause(caller)` | Admin-only emergency stop (pauser can also pause). |
-| `set_pauser(caller, pauser)` / `revoke_pauser(caller)` | Admin-only management of emergency pauser address. |
-| `propose_token_addition(caller, token)` / `execute_token_addition(caller, token)` | Admin-only. Whitelists an extra treasury asset after the 48h `TIMELOCK_DURATION`. The base `token` is always whitelisted. |
-| `remove_token(caller, token)` | Admin-only. Blocks new loans/withdrawals in `token`; loans already issued in it stay repayable. The base token can't be removed. |
-| `bump_dao_ttl()` | Extends the contract instance and core storage TTL. |
-
-**Membership**
-
-| Method | Description |
-|---|---|
-| `register_member(member)` | Pays the membership fee, joins the DAO. |
-| `exit_dao(member)` | Withdraws the base-token pro-rata share and stake, plus pending yield in each tracked asset. Blocked while `has_active_loan`. |
-| `claim_rewards(member)` | Withdraws accrued base-token loan-interest yield. |
-| `claim_rewards_in_asset(member, asset)` | Withdraws accrued loan-interest yield in `asset` without settling other assets. |
-| `delegate_vote(delegator, delegatee)` | Delegates voting power to another active member (single-level). |
-
-**Lending**
-
-| Method | Description |
-|---|---|
-| `request_loan(borrower, amount) -> proposal_id` | Opens a loan proposal (3-day editing window). |
-| `request_loan_in_asset(borrower, amount, asset, metadata_cid) -> proposal_id` | Same as `request_loan`, denominated in a whitelisted `asset` and sized/priced against the treasury held in it. |
-| `edit_loan_proposal(borrower, proposal_id, new_amount, metadata_cid)` | Only during the editing window, only the borrower. Pass `None` to clear the metadata CID. |
-| `cancel_loan_proposal(borrower, proposal_id)` | Only during the editing window, only the borrower. |
-| `vote_on_loan_proposal(voter, proposal_id, support)` | Auto-approves and disburses at the consensus threshold. |
-| `vote_batch(voter, votes)` | Casts votes across up to 10 loan proposals in one call. Larger batches return `TooManyVotesInBatch` (92). |
-| `disburse_approved_loan(loan_id)` | Disburses an approved loan's funds. |
-| `repay_loan(borrower, loan_id)` | Collects the full outstanding balance in one transaction. |
-| `repay_loan_in_asset(borrower, loan_id, asset)` | `repay_loan` that fails with `AssetMismatch` unless `asset` is the loan's own asset. Interest is credited as yield in the loan's own asset. |
-| `repay_loan_partial(borrower, loan_id, amount)` | Collects up to `amount` of the outstanding balance. Applies to accrued interest first, then principal; the loan flips to repaid only once the balance reaches exactly zero. |
-| `mark_loan_defaulted(loan_id)` | **Permissionless.** Callable once `due_time + grace_period` has elapsed. |
-| `expire_loan_proposal(proposal_id)` | **Permissionless keeper call.** Persists the expired state for a proposal whose voting window has passed without reaching quorum. No-op on repeat calls. |
-
-**Treasury**
-
-| Method | Description |
-|---|---|
-| `propose_treasury_withdrawal(proposer, amount, destination, reason, private) -> proposal_id` | `private` routes it through commit-reveal instead of open voting. |
-| `propose_withdrawal_in_asset(proposer, amount, asset, destination, reason, private) -> proposal_id` | Same as `propose_treasury_withdrawal`, paid out in a whitelisted `asset`. (Soroban caps entrypoint names at 32 characters, hence no `treasury_` prefix.) |
-| `cancel_treasury_proposal(proposer, proposal_id)` | Only the proposer, only while pending and within the policy's editing period. |
-| `vote_on_treasury_proposal(voter, proposal_id, support)` | Auto-executes at 60% consensus. Rejected on a private proposal — use commit/reveal instead. |
-| `execute_treasury_proposal(proposal_id)` | Executes an approved treasury withdrawal proposal. |
-
-**Migration / State Seeding (#332)**
-
-| Method | Description |
-|---|---|
-| `seed_members(entries)` / `seed_stakes(entries)` / `seed_pending_yield(entries)` / `seed_loans(entries)` / `seed_names(entries)` / `seed_docs(entries)` | Admin-only migration state seeding entrypoints. |
-| `lock_seeding()` / `is_seeding_locked() -> bool` | Permanently locks seeding upon migration completion. |
-
-**Staking**
-
-| Method | Description |
-|---|---|
-| `stake(member, amount)` / `unstake(member, amount)` | Boosts voting weight quadratically (`1 + isqrt(stake / 100)`, capped at 6); kept separate from lendable treasury. |
-
-**Staking weight table.** Voting weight is `1 + min(isqrt(stake / 100), 5)`, as computed by `util::voting_weight`. Each bonus step costs more than the one before it, so the boost grows slowly with stake:
-
-| Staked amount | Bonus votes | Voting weight |
-|---:|---:|---:|
-| 0 – 99 | 0 | 1 |
-| 100 – 399 | 1 | 2 |
-| 400 – 899 | 2 | 3 |
-| 900 – 1,599 | 3 | 4 |
-| 1,600 – 2,499 | 4 | 5 |
-| 2,500 and above | 5 (cap) | 6 |
-
-The *k*-th bonus vote starts at `k² × 100` staked tokens, so the thresholds are 100, 400, 900, 1,600, and 2,500. The table shows a member's own stake. A member's weight also includes the base vote and boost of anyone who has delegated to them.
-
-**Name registry**
-
-| Method | Description |
-|---|---|
-| `register_name(owner, name)` | 1:1 name ⇄ address; re-registering frees the owner's previous name. Names must be 3–32 chars, ASCII lowercase alphanumeric plus `-` and `_`, with no leading/trailing separator. |
-| `resolve_name(name) -> Option<Address>` / `name_of(owner) -> Option<String>` | Views. |
-
-**Commit-reveal voting**
-
-| Method | Description |
-|---|---|
-| `commit_treasury_vote(voter, proposal_id, commitment)` | `commitment = sha256(XDR(voter) ++ proposal_id_be ++ support_byte ++ salt)`. |
-| `reveal_treasury_vote(voter, proposal_id, support, salt)` | Verifies the commitment, then tallies through the shared path. |
-| `verify_commitment(voter, proposal_id, support, salt) -> bool` | Read-only reveal pre-check; `false` when no commitment matches. |
-| `get_commit_reveal_window(proposal_id) -> Result<(u64, u64), Error>` | `(commit_end, reveal_end)` for a private proposal; `NotAuthorized` for a public one. |
-
-**Content-hash documents**
-
-| Method | Description |
-|---|---|
-| `attach_document(caller, kind, proposal_id, content_hash)` | Anchors an off-chain content hash (e.g. IPFS CID) to a real loan/treasury proposal. |
-| `get_document(kind, proposal_id) -> Option<Bytes>` | View. |
-
-**Views** — `get_member`, `get_member_overview`, `get_loan`, `get_loan_proposal` (auto-refreshes expired phase), `get_loan_proposal_count`, `get_treasury_proposal`, `get_treasury_proposal_count`, `get_loan_policy`, `get_pending_policy_update`, `get_admins`, `is_admin`, `is_member`, `is_eligible_for_loan`, `get_treasury_balance`, `get_treasury_balance_in_asset(asset)`, `is_token_whitelisted(token)`, `get_whitelisted_tokens`, `get_total_members`, `get_active_members`, `get_consensus_threshold`, `get_token`, `get_version`, `get_dao_summary` (all headline state in one call), `is_paused`, `get_stake`, `get_stake_weight_unit`, `get_max_stake_bonus`, `get_pending_yield` (base token), `get_pending_yield_in_asset(member, asset)`, `get_delegate`, `list_members`, `list_treasury_proposals`, `calculate_loan_terms` (a quote is only available when `amount <= max_loan`; `max_loan` is 0 when the treasury is empty), `calculate_exit_share`, `has_voted(kind, proposal_id, voter)`.
-
-> **Note on Treasury Balance Views (#500, #501)**: `get_treasury_balance` and `get_treasury_balance_in_asset` report the DAO's lendable treasury balance, explicitly excluding staked member deposits for the base token to maintain invariant L1. Raw, stake-inclusive token balance is not exposed as a separate entrypoint because external audit/reconciliation tools can query the token contract's standard `balance(&dao_address)` directly. Furthermore, `get_treasury_balance_in_asset(asset)` (#501) is not restricted to whitelisted assets; it reads the contract's actual balance for any queried asset address.
+| Method |
+|---|
+| `initialize` |
+| `add_admin` |
+| `remove_admin` |
+| `set_pauser` |
+| `revoke_pauser` |
+| `set_consensus_threshold` |
+| `propose_policy_update` |
+| `execute_policy_update` |
+| `cancel_policy_update` |
+| `set_loan_policy` |
+| `pause` |
+| `unpause` |
+| `register_member` |
+| `exit_dao` |
+| `claim_rewards` |
+| `claim_rewards_in_asset` |
+| `delegate_vote` |
+| `request_loan` |
+| `request_loan_in_asset` |
+| `edit_loan_proposal` |
+| `cancel_loan_proposal` |
+| `vote_on_loan_proposal` |
+| `vote_batch` |
+| `disburse_approved_loan` |
+| `repay_loan` |
+| `repay_loan_in_asset` |
+| `repay_loan_partial` |
+| `mark_loan_defaulted` |
+| `expire_loan_proposal` |
+| `propose_treasury_withdrawal` |
+| `propose_withdrawal_in_asset` |
+| `vote_on_treasury_proposal` |
+| `cancel_treasury_proposal` |
+| `expire_treasury_proposal` |
+| `execute_treasury_proposal` |
+| `bump_dao_ttl` |
+| `stake` |
+| `unstake` |
+| `register_name` |
+| `resolve_name` |
+| `name_of` |
+| `commit_treasury_vote` |
+| `reveal_treasury_vote` |
+| `verify_commitment` |
+| `get_commit_reveal_window` |
+| `attach_document` |
+| `get_document` |
+| `get_member` |
+| `try_execute_policy_update` |
+| `get_member_loan_stats` |
+| `get_member_overview` |
+| `get_loan` |
+| `get_loan_proposal` |
+| `get_treasury_proposal` |
+| `get_loan_proposal_count` |
+| `get_treasury_proposal_count` |
+| `get_loan_policy` |
+| `get_pending_policy_update` |
+| `get_admins` |
+| `is_admin` |
+| `is_member` |
+| `is_eligible_for_loan` |
+| `get_treasury_balance` |
+| `get_treasury_balance_in_asset` |
+| `get_treasury_accounting` |
+| `get_total_members` |
+| `get_active_members` |
+| `get_consensus_threshold` |
+| `get_token` |
+| `is_initialized` |
+| `get_dao_summary` |
+| `propose_token_addition` |
+| `execute_token_addition` |
+| `remove_token` |
+| `is_token_whitelisted` |
+| `get_whitelisted_tokens` |
+| `get_pending_token_addition` |
+| `get_pending_token_additions` |
+| `is_paused` |
+| `get_version` |
+| `get_stake` |
+| `get_voting_weight` |
+| `get_stake_weight_unit` |
+| `get_max_stake_bonus` |
+| `get_pending_yield` |
+| `get_pending_yield_in_asset` |
+| `get_delegate` |
+| `has_voted` |
+| `calculate_loan_terms` |
+| `calculate_exit_share` |
+| `list_members` |
+| `list_treasury_proposals` |
+| `list_loans` |
+| `seed_members` |
+| `seed_stakes` |
+| `seed_pending_yield` |
+| `seed_loans` |
+| `seed_names` |
+| `seed_docs` |
+| `lock_seeding` |
+| `is_seeding_locked` |
 
 ## Event catalog
 
-Every state-changing call publishes an event, which `ourdao-backend` indexes since Soroban itself keeps no queryable history. Topic symbol → data tuple:
+Each published topic and its event payload are listed below. `ourdao-backend` indexes these events because Soroban does not keep queryable history.
 
-| Symbol | Data | Emitted by |
+| Topic | Payload | Emitted by |
 |---|---|---|
-| `init` | `(admins, threshold, fee, token)` | `initialize` |
-| `admin_add` / `admin_rem` | `admin` | `add_admin` / `remove_admin` |
-| `threshold` | `threshold` | `set_consensus_threshold` |
-| `policy` / `paused` / `unpaused` | — | `set_loan_policy` / `pause` / `unpause` |
+| `init` | `(admins, consensus_threshold, membership_fee, token)` | `initialize` |
+| `admin_add` | `admin` | `add_admin` |
+| `admin_rem` | `admin` | `remove_admin` |
+| `pset` | `(old_pauser, new_pauser)` | `set_pauser` |
+| `prev` | `(old_pauser, caller)` | `revoke_pauser` |
+| `threshold` | `(old_threshold, new_threshold)` | `set_consensus_threshold` |
+| `pol_prop` | `(caller, execution_time)` | `propose_policy_update` |
+| `policy` | `(old_policy, new_policy)` | `execute_policy_update` / `try_execute_policy_update` |
+| `pol_canc` | `caller` | `cancel_policy_update` |
+| `paused` | `caller` | `pause` |
+| `unpaused` | `caller` | `unpause` |
+| `tok_prop` | `(caller, token, execution_time)` | `propose_token_addition` |
+| `tok_add` | `(caller, token)` | `execute_token_addition` |
+| `tok_rem` | `(caller, token)` | `remove_token` |
 | `joined` | `(member, fee)` | `register_member` |
-| `exited` | `(member, share)` | `exit_dao` |
-| `claimed` | `(member, pending)` | `claim_rewards` |
-| `exit_a` | `(member, asset, amount)` | `exit_dao` non-base asset yield settlement |
-| `clm_ast` | `(member, asset, amount)` | `claim_rewards_in_asset` for a non-base asset |
-| `loan_req` | `(id, borrower, amount, total_repayment, asset)` | `request_loan` / `request_loan_in_asset` — `asset` is the loan's asset (the base token unless set) |
+| `name_rel` | `(old_name, owner)` | `register_name` when replacing a name; `exit_dao` |
+| `exited` | `(member, share, pending_base_yield)` | `exit_dao` |
+| `exit_a` | `(member, asset, amount)` | `exit_dao` when paying non-base yield |
+| `claimed` | `StakingRewardClaimed { member, amount, timestamp }` (the topics also include `member` and `pending`) | `claim_rewards` for the base token |
+| `clm_ast` | `(member, asset, pending)` | `claim_rewards_in_asset` for a non-base asset |
+| `delegate` | `(delegator, delegatee)` | `delegate_vote` |
+| `loan_asst` | `(id, asset)` | `request_loan_in_asset` when the asset is not the base token |
+| `loan_req` | `(id, borrower, amount, total_repayment, asset)` | `request_loan` / `request_loan_in_asset` |
 | `loan_edit` | `(proposal_id, borrower, new_amount, total_repayment)` | `edit_loan_proposal` |
-| `loan_vote` | `(proposal_id, voter, support)` | `vote_on_loan_proposal` |
-| `loan_appr` | `(id, borrower, amount, due_time, asset)` | auto-fired on approval — `id` is both the loan's and its proposal's id |
-| `loan_rpy` | `(loan_id, borrower, outstanding, asset)` | `repay_loan` / `repay_loan_partial` / `repay_loan_in_asset` — `outstanding` is the balance still remaining *after* this payment (0 for a payment that fully repays the loan) |
+| `loan_vote` | `(proposal_id, voter, support)` | `vote_on_loan_proposal` / `vote_batch` |
+| `loan_wait` | `(proposal_id, amount)` | `vote_on_loan_proposal` / `vote_batch` when an approved loan cannot be disbursed immediately |
+| `loan_rej` | `(proposal_id, for_votes, against_votes)` | `vote_on_loan_proposal` / `vote_batch` when approval becomes unreachable |
+| `loan_appr` | `(id, borrower, amount, due_time, asset)` | Loan disbursement after approval; `id` is also the proposal ID |
+| `loan_rpy` | `(loan_id, borrower, remaining, asset)` | `repay_loan` / `repay_loan_partial` / `repay_loan_in_asset` |
+| `loan_partial_repaid` | `(borrower, amount)` | Legacy `loans::repay_partial` helper |
+| `interest` | `(interest, active_members, asset)` | Interest distribution during loan repayment |
 | `loan_dflt` | `(loan_id, borrower, penalty)` | `mark_loan_defaulted` |
-| `loan_exp` | `(proposal_id, borrower)` | `expire_loan_proposal` (permissionless keeper) |
-| `interest` | `(interest, active_members, asset)` | fired alongside `loan_rpy` for positive interest repayments in any asset |
-| `tre_prop` | `(id, amount, destination, private)` | `propose_treasury_withdrawal` |
-| `tre_vote` | `(id, voter, support)` | `vote_on_treasury_proposal` |
-| `tre_exec` | `(id, amount, destination)` | auto-fired on execution |
-| `tre_exp` | `(proposal_id, proposer)` | `expire_treasury_proposal` (permissionless keeper) |
-| `loan_asst` / `tre_asset` | `(id, asset)` | `request_loan_in_asset` / `propose_withdrawal_in_asset`, only when `asset` isn't the base token |
-| `prop_canc` | `(proposal_id, timestamp)` | `cancel_loan_proposal` / `cancel_treasury_proposal` |
-| `tok_prop` | `(proposal_id, caller, token, execution_time)` | `propose_token_addition` |
-| `tok_add` / `tok_rem` | `(proposal_id, caller, token)` | `execute_token_addition` / `remove_token`; removal reuses the token's original addition proposal id |
-| `staked` / `unstaked` | `(member, amount, new_stake)` | `stake` / `unstake` |
+| `loan_exp` | `(proposal_id, borrower)` | `expire_loan_proposal` |
+| `prop_canc` | `(proposal_id, timestamp)` | `cancel_loan_proposal` / `cancel_treasury_proposal` (proposal-cancelled event) |
+| `tre_asset` | `(id, asset)` | `propose_withdrawal_in_asset` when the asset is not the base token |
+| `tre_prop` | `(id, amount, destination, private)` | `propose_treasury_withdrawal` / `propose_withdrawal_in_asset` |
+| `tre_vote` | `(id, voter, support)` | `vote_on_treasury_proposal` / `reveal_treasury_vote` |
+| `tre_wait` | `(proposal_id, amount)` | Treasury vote when an approved withdrawal cannot execute immediately |
+| `tre_rej` | `(proposal_id, for_votes, against_votes)` | Treasury vote when approval becomes unreachable |
+| `tre_exec` | `(id, amount, destination)` | Treasury proposal execution |
+| `tre_exp` | `(proposal_id, proposer)` | `expire_treasury_proposal` |
 | `name_reg` | `(name, owner)` | `register_name` |
 | `committed` | `(proposal_id, voter)` | `commit_treasury_vote` |
 | `revealed` | `(proposal_id, voter, support)` | `reveal_treasury_vote` |
+| `staked` | `(member, amount, new_stake, voting_weight)` | `stake` |
+| `unstaked` | `(member, amount, new_stake, voting_weight)` | `unstake` |
 | `doc_attn` | `(kind, proposal_id, caller)` | `attach_document` |
+| `TtlBumped` | `()` | `bump_dao_ttl` |
 
 ## Error codes
 
 Numeric codes are stable and part of the ABI — new variants get appended rather than renumbering existing ones.
 
-| Range | Meaning |
-|---|---|
-| 1–7 | Lifecycle/config: `AlreadyInitialized`, `NotInitialized`, `InvalidThreshold`, `InvalidAmount`, `InvalidLoanPolicy`, `Paused`, `NotPaused` |
-| 10–15 | Authorization: `NotAuthorized`, `NotAdmin`, `NotMember`, `AlreadyAdmin`, `AlreadyMember`, `CannotRemoveLastAdmin` |
-| 20–21 | Membership: `MemberNotActive`, `HasActiveLoan` |
-| 30–42 | Loans: `ProposalNotFound`, `NotBorrower`, `NotInEditingPhase`, `NotInVotingPhase`, `VotingEnded`, `AlreadyVoted`, `NotEligibleForLoan`, `CooldownActive`, `LoanNotFound`, `LoanNotActive`, `ExceedsTreasuryRatio`, `InsufficientTreasury`, `LoanNotOverdue` |
-| 50 | Treasury: `TreasuryProposalNotFound` |
-| 60–67 | Native-swap modules: `NameTaken`, `NameNotFound`, `NoStake`, `InsufficientStake`, `NoCommitment`, `CommitmentMismatch`, `AlreadyRevealed`, `NothingToClaim` |
-| 70–72 | Appended: `ProposalNotExpired`, `InvalidName`, `NotYetRevealed` |
-| 83–87 | Multi-token treasury: `TokenNotWhitelisted`, `TokenAlreadyWhitelisted`, `NoPendingTokenAddition`, `AssetMismatch`, `CannotRemoveBaseToken` |
-| 92 | Multi-token safety: `TokenHasBalance` |
-| 93 | Appended: `JoinedAfterProposal` — voter joined after the proposal was created (#73) |
-
-**Reserved codes** (#252): `NameNotFound` (61) and `NotAdmin2` (95) are never returned by the contract. They stay in `Error` because codes are append-only; see the doc comments in `contracts/dao/src/error.rs`.
+| Code | Variant |
+|---:|---|
+| 1 | `AlreadyInitialized` |
+| 2 | `NotInitialized` |
+| 3 | `InvalidThreshold` |
+| 4 | `InvalidAmount` |
+| 5 | `InvalidLoanPolicy` |
+| 6 | `Paused` |
+| 7 | `NotPaused` |
+| 10 | `NotAuthorized` |
+| 11 | `NotAdmin` |
+| 12 | `NotMember` |
+| 13 | `AlreadyAdmin` |
+| 14 | `AlreadyMember` |
+| 15 | `CannotRemoveLastAdmin` |
+| 20 | `MemberNotActive` |
+| 21 | `HasActiveLoan` |
+| 30 | `ProposalNotFound` |
+| 31 | `NotBorrower` |
+| 32 | `NotInEditingPhase` |
+| 33 | `NotInVotingPhase` |
+| 34 | `VotingEnded` |
+| 35 | `AlreadyVoted` |
+| 36 | `NotEligibleForLoan` |
+| 37 | `CooldownActive` |
+| 38 | `LoanNotFound` |
+| 39 | `LoanNotActive` |
+| 40 | `ExceedsTreasuryRatio` |
+| 41 | `InsufficientTreasury` |
+| 42 | `LoanNotOverdue` |
+| 50 | `TreasuryProposalNotFound` |
+| 60 | `NameTaken` |
+| 61 | `NameNotFound` |
+| 62 | `NoStake` |
+| 63 | `InsufficientStake` |
+| 64 | `NoCommitment` |
+| 65 | `CommitmentMismatch` |
+| 66 | `AlreadyRevealed` |
+| 67 | `NothingToClaim` |
+| 70 | `ProposalNotExpired` |
+| 71 | `InvalidName` |
+| 72 | `NotYetRevealed` |
+| 73 | `NotProposalOwner` |
+| 74 | `DocumentTooLarge` |
+| 75 | `InvalidToken` |
+| 76 | `TimelockNotExpired` |
+| 77 | `NoPendingPolicy` |
+| 78 | `InvalidMetadataCid` |
+| 79 | `InvalidDelegation` |
+| 80 | `InvalidProposal` |
+| 81 | `AlreadyPauser` |
+| 82 | `NotPauser` |
+| 83 | `TokenNotWhitelisted` |
+| 84 | `TokenAlreadyWhitelisted` |
+| 85 | `NoPendingTokenAddition` |
+| 86 | `AssetMismatch` |
+| 87 | `CannotRemoveBaseToken` |
+| 88 | `SeedingLocked` |
+| 89 | `SeedingAlreadyLocked` |
+| 90 | `TooManyOpenProposals` |
+| 91 | `BorrowerCannotVote` |
+| 92 | `TokenHasBalance` |
 
 ## Build & test
 
