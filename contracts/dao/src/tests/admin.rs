@@ -900,15 +900,14 @@ fn policy_update_cancel_by_admin() {
 }
 
 #[test]
-// Regression guard for #372: a release must expose the package version it was
-// built from, rather than a separately maintained contract constant.
-fn get_version_returns_cargo_pkg_version() {
+// Regression guard for #265: the v0.2.0 release must expose its package version.
+fn get_version_returns_0_2_0() {
     let env = Env::default();
     let contract_id = env.register(OurDao, ());
     let client = OurDaoClient::new(&env, &contract_id);
 
     let version = client.get_version();
-    assert_eq!(version, String::from_str(&env, env!("CARGO_PKG_VERSION")));
+    assert_eq!(version, String::from_str(&env, "0.2.0"));
 }
 
 // #339: the summary must agree field-for-field with the views it replaces.

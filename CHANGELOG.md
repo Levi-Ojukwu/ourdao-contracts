@@ -1,8 +1,10 @@
 # Changelog
 
-All notable changes to `ourdao-contracts` are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to follow [Semantic Versioning](https://semver.org/). The workspace version in `Cargo.toml` has been `0.1.0` since the first commit; entries below are grouped under **Unreleased** until a version is cut, at which point the version in `Cargo.toml` should be bumped alongside a dated heading here.
+All notable changes to `ourdao-contracts` are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to follow [Semantic Versioning](https://semver.org/). Update the workspace version in `Cargo.toml` alongside each dated release heading.
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-11-21
 
 ### Changed
 - The README ABI section now lists each public contract method from `lib.rs`; `scripts/generate-abi.sh --markdown` prints the table for regeneration (#258).
@@ -26,6 +28,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - `scripts/deploy-testnet.sh` deploys a second test asset (`OURTESTB`) on testnet and proposes it for the treasury whitelist; `DEPLOYMENTS.md` tracks it (#342).
 - `get_member_overview(member)` view returning the member record, stake, pending yield, loan stats, registered name and delegate in one call (#340).
 - `get_delegate(delegator)` view returning the address a member delegated their vote to, or `None` (#341).
+- Members can delegate voting weight to another active member; the delegate view exposes that assignment (#188, #341, #510).
 - `docs/events.schema.json`: machine-readable event schema covering all contract event topics (#344).
 - `treasury::tally` and `loans::vote_on_loan_proposal` read the active-member count (and policy/threshold) once per call (#355).
 - `bench-cost.sh` now runs a real `test_budget_scaling` benchmark that also covers `request_loan_in_asset`, `repay_loan_in_asset` and `propose_withdrawal_in_asset` (#354).
