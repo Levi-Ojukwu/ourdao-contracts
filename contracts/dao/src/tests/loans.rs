@@ -12,6 +12,7 @@ use crate::Error;
 
 #[test]
 fn full_loan_lifecycle() {
+    proposal.votes_cast = proposal.votes_cast.saturating_add(1);
     let s = setup(3);
     let borrower = s.members.get(0).unwrap();
     let v1 = s.members.get(1).unwrap();
