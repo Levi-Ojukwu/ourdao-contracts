@@ -302,7 +302,7 @@ pub fn propose_token_addition(env: &Env, caller: Address, token: Address) -> Res
     storage::set_token_proposal_id(env, &token, proposal_id);
     extend_instance(env);
     env.events().publish(
-        (symbol_short!("tok_prop"),),
+        (crate::events::TOK_PROP,),
         (proposal_id, caller, token, execution_time),
     );
     Ok(())
@@ -326,7 +326,7 @@ pub fn execute_token_addition(env: &Env, caller: Address, token: Address) -> Res
     storage::set_token_whitelisted(env, &token, true);
     extend_instance(env);
     env.events()
-        .publish((symbol_short!("tok_add"),), (proposal_id, caller, token));
+        .publish((crate::events::TOK_ADD,), (proposal_id, caller, token));
     Ok(())
 }
 
@@ -349,26 +349,10 @@ pub fn remove_token(env: &Env, caller: Address, token: Address) -> Result<(), Er
     if util::treasury_balance_for(env, &token) > 0 {
         return Err(Error::TokenHasBalance);
     }
+    let proposal_id = storage::get_token_proposal_id(env, &token).unwrap_or(0);
     storage::set_token_whitelisted(env, &token, false);
     extend_instance(env);
     env.events()
-        .publish((symbol_short!("tok_rem"),), (proposal_id, caller, token));
-    Ok(())
-
-/// Try to execute a pending policy update, if the timelock has expired and the
-/// caller is an admin. Returns `TimelockNotExpired` if the timelock has not yet
-/// elapsed, and `NoPendingPolicy` if there is no pending update.
-#[allow(deprecated)]
-pub fn try_execute_policy_update(env: &Env, caller: Address) -> Result<(), Error> {
-    util::require_admin(env, &caller)?;
-    let pending = storage::get_pending_policy_update(env).ok_or(Error::NoPendingPolicy)?;
-    if env.ledger().timestamp() < pending.execution_time {
-        return Err(Error::TimelockNotExpired);
-    }
-    // Clear the pending update before applying it, in case execution fails
-    storage::remove_pending_policy_update(env);
-    storage::set_policy(env, &caller, pending.policy)?;
-    extend_instance(env);
-    env.events().publish((symbol_short!(\"policy\"),), (pending.policy, pending.policy));
+        .publish((crate::events::TOK_REM,), (proposal_id, caller, token));
     Ok(())
 }
