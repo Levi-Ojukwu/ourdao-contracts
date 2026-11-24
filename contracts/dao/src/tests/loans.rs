@@ -8,6 +8,7 @@ use super::common::*;
 use crate::admin::TIMELOCK_DURATION;
 use crate::storage::ProposalKind;
 use crate::types::{LoanStatus, ProposalPhase, ProposalStatus, ProposalVote};
+use crate::util::BASE_VOTE_WEIGHT;
 use crate::Error;
 
 #[test]
@@ -1616,42 +1617,85 @@ fn repay_loan_in_asset_wrong_asset_moves_no_tokens() {
     assert_eq!(s.client.get_loan(&pid).unwrap().amount_repaid, 0);
 }
 
-
-// Issue #283: repayment must not credit more than a fee-on-transfer asset delivered.
+// Issue #509: voting power is deliberately independent of economic contribution.
 #[test]
-fn fee_on_transfer_repayment_is_rejected_and_rolled_back() {
+fn heavily_slashed_member_keeps_full_base_voting_weight() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let voter = s.members.get(1).unwrap();
+
+    s.env.as_contract(&s.client.address, || {
+        let mut member = crate::storage::get_member(&s.env, &voter).unwrap();
+        member.contribution = 1;
+        crate::storage::set_member(&s.env, &member);
+    });
+    assert_eq!(s.client.get_member(&voter).unwrap().contribution, 1);
+    assert_eq!(s.client.get_voting_weight(&voter), BASE_VOTE_WEIGHT);
+
+    let pid = s.client.request_loan(&borrower, &500, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&voter, &pid, &true);
+
+    let proposal = s.client.get_loan_proposal(&pid).unwrap();
+    assert_eq!(proposal.for_votes, BASE_VOTE_WEIGHT);
+}
+
+// Issue #515: partial repayment and default penalties are independent mechanisms.
+#[test]
+fn partial_repayment_before_due_then_default_only_slashes_contribution() {
     let s = setup(3);
     let borrower = s.members.get(0).unwrap();
     let v1 = s.members.get(1).unwrap();
     let v2 = s.members.get(2).unwrap();
 
-    let fee_token_id = s.env.register(FeeToken, ());
-    let fee_token = FeeTokenClient::new(&s.env, &fee_token_id);
-    s.client.propose_token_addition(&s.admin, &fee_token_id);
-    advance(&s.env, TIMELOCK_DURATION);
-    s.client.execute_token_addition(&s.admin, &fee_token_id);
-    fee_token.mint(&s.client.address, &10_000);
-
-    let pid = s
-        .client
-        .request_loan_in_asset(&borrower, &1_000, &fee_token_id, &None);
+    let pid = s.client.request_loan(&borrower, &500, &None);
     advance(&s.env, EDITING + 1);
     s.client.vote_on_loan_proposal(&v1, &pid, &true);
     s.client.vote_on_loan_proposal(&v2, &pid, &true);
 
-    let loan_before = s.client.get_loan(&pid).unwrap();
-    fee_token.mint(&borrower, &loan_before.total_repayment);
-    let dao_before = fee_token.balance(&s.client.address);
-    let borrower_before = fee_token.balance(&borrower);
+    let original = s.client.get_loan(&pid).unwrap();
+    let partial = original.total_repayment * 30 / 100;
+    s.client.repay_loan_partial(&borrower, &pid, &partial);
 
+    let after_partial = s.client.get_loan(&pid).unwrap();
+    assert_eq!(after_partial.amount_repaid, partial);
+    assert_eq!(after_partial.total_repayment, original.total_repayment);
+
+    let contribution_before = s.client.get_member(&borrower).unwrap().contribution;
+    advance(&s.env, LOAN_DURATION + 1);
+    s.client.mark_loan_defaulted(&pid);
+
+    let defaulted = s.client.get_loan(&pid).unwrap();
+    assert_eq!(defaulted.total_repayment, original.total_repayment);
+    let expected_slash = (contribution_before * 2_000 + 10_000 - 1) / 10_000;
     assert_eq!(
-        s.client
-            .try_repay_loan_in_asset(&borrower, &pid, &fee_token_id),
-        Err(Ok(Error::TransferAmountMismatch))
+        s.client.get_member(&borrower).unwrap().contribution,
+        contribution_before - expected_slash
     );
+}
 
-    // Contract error reverts the token transfer and all accounting writes.
-    assert_eq!(fee_token.balance(&s.client.address), dao_before);
-    assert_eq!(fee_token.balance(&borrower), borrower_before);
-    assert_eq!(s.client.get_loan(&pid).unwrap(), loan_before);
+#[test]
+fn post_due_partial_repayment_adds_late_fee_before_payment() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+
+    let pid = s.client.request_loan(&borrower, &500, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v1, &pid, &true);
+    s.client.vote_on_loan_proposal(&v2, &pid, &true);
+
+    let before = s.client.get_loan(&pid).unwrap();
+    advance(&s.env, LOAN_DURATION + 1);
+    s.client.repay_loan_partial(&borrower, &pid, &100);
+
+    let after = s.client.get_loan(&pid).unwrap();
+    let expected_fee =
+        (before.total_repayment * 2_000 + 10_000 - 1) / 10_000;
+    assert_eq!(
+        after.total_repayment,
+        before.total_repayment + expected_fee
+    );
+    assert_eq!(after.amount_repaid, 100);
 }

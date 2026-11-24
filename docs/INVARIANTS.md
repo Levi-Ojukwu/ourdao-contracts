@@ -200,6 +200,28 @@ i.e. `k` bonus votes cost `STAKE_WEIGHT_UNIT * k * k` staked tokens
 `staking::quadrupling_stake_doubles_the_boost`
 (`contracts/dao/src/tests/`)
 
+### G5 — Voting weight is independent of member contribution
+**Statement:** A member's `Member.contribution` does not enter the voting-weight
+formula. An active member retains the full `BASE_VOTE_WEIGHT` plus any staking
+boost even after default slashing reduces their economic contribution. This is
+deliberate: G1–G4 define governance weight in terms of membership, staking and
+delegation, while contribution controls economic exit share and loan eligibility.
+
+**Tested:** ✅ `loans::heavily_slashed_member_keeps_full_base_voting_weight`
+(`contracts/dao/src/tests/loans.rs`)
+
+### G6 — Proposal evidence is immutable once voting has begun
+**Statement:** Loan documents may only change during the loan editing phase.
+Treasury proposals have no explicit editing phase, so their attached document
+may change only while `votes_cast == 0`. After the first treasury vote, the
+document hash is locked. This prevents voters from approving one document and
+having the proposer silently replace it with another.
+
+**Tested:** ✅ `docs::attach_document_treasury_proposal_proposer_and_non_proposer`
+(`contracts/dao/src/tests/docs.rs`)
+
+---
+
 ---
 
 ## Rounding invariants

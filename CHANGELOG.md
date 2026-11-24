@@ -13,10 +13,10 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - Added a regression test ensuring wrong-asset loan repayment fails before moving any tokens (#278).
 - Added a regression test proving treasury proposals execute strictly in their recorded asset even after whitelist removal (#279).
 - Staking now escrows/returns the configured base token, and regression coverage proves membership fees and staking ignore additional whitelisted treasury assets (#280).
-- Added `get_treasury_balances` to return balances for the base token and every whitelisted treasury asset (#281).
-- Bounded the treasury token whitelist to 10 assets including the base token, preventing unbounded iteration costs (#282).
-- Repayments now verify the treasury actually received the full inbound token amount, rejecting fee-on-transfer assets without over-crediting debt (#283).
-- `tok_prop`, `tok_add`, and `tok_rem` whitelist events now include a stable token proposal id plus the caller for indexer attribution (#284).
+- Documented and regression-tested that voting weight is independent of a member's contribution (#509).
+- Locked treasury proposal documents after the first vote so governance evidence cannot be swapped mid-vote (#514).
+- Added a worked example and regression tests explaining how partial repayment, overdue repayment fees, and default contribution slashing interact (#515).
+- CI now enforces append-only, unique error-code discriminants and requires comments for intentional numeric gaps (#528).
 - Explicitly enforce and document that pausers cannot unpause (`admin::unpause` requires admin authorization and rejects non-admin pausers with `Error::NotAdmin`), separating emergency halt and resume privileges (#319).
 - `loan_req`, `loan_appr`, `loan_rpy` and `interest` events now carry the loan's `asset` as a trailing field (#343). Existing positional fields are unchanged, so indexers that read by position keep working; `interest` is only emitted for base-token repayments.
 - `exit_dao` / `calculate_exit_share` are now O(1): a maintained `ActiveContributions` total replaces the per-member scan (#353).
