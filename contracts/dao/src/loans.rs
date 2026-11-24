@@ -504,6 +504,7 @@ fn approve_and_disburse(env: &Env, proposal: &LoanProposal) -> Result<(), Error>
     };
     storage::set_loan(env, &loan);
     storage::adjust_outstanding_principal(env, &asset, principal_outstanding(&loan));
+    storage::increment_active_loans_in_asset(env, &asset);
 
     let mut borrower = storage::get_member(env, &proposal.borrower).ok_or(Error::NotMember)?;
     borrower.has_active_loan = true;
@@ -675,6 +676,7 @@ fn repay_loan_internal(
         .ok_or(Error::ArithmeticOverflow)?;
     if remaining == 0 {
         loan.status = LoanStatus::Repaid;
+        storage::decrement_active_loans_in_asset(env, &asset);
         if let Some(mut member) = storage::get_member(env, &borrower) {
             member.has_active_loan = false;
             member.repaid_loans += 1;
@@ -785,9 +787,11 @@ pub fn mark_loan_defaulted(env: &Env, loan_id: u32) -> Result<(), Error> {
     let written_off = principal_outstanding(&loan);
     loan.status = LoanStatus::Defaulted;
     storage::set_loan(env, &loan);
+    let asset = storage::get_loan_asset(env, loan_id);
+    storage::decrement_active_loans_in_asset(env, &asset);
     storage::adjust_outstanding_principal(
         env,
-        &storage::get_loan_asset(env, loan_id)?,
+        &asset,
         -written_off,
     );
 

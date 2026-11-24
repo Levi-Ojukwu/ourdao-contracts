@@ -40,6 +40,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 - `tre_exp` event on successful treasury proposal expiry, documented in the README and `docs/events.schema.json` (#477).
 
 ### Fixed
+- `remove_token` now rejects an asset while any loan denominated in it is active (#273).
 - `remove_token` now rejects removal while the treasury still holds any balance of that asset (#272).
 - Audit all eight DAO token-transfer call sites and align state effects before external token interactions (#317).
 - Enforce and regression-test admin-only `unpause`: the dedicated pauser may pause but cannot resume the DAO (#319).

@@ -97,8 +97,8 @@ pub enum Error {
     TooManyOpenProposals = 90,
     /// A borrower cannot vote on their own loan proposal (#327).
     BorrowerCannotVote = 91,
-    /// The treasury asset whitelist has reached its bounded maximum (#282).
-    WhitelistFull = 92,
-    /// An inbound token transfer delivered less than the requested amount (#283).
-    TransferAmountMismatch = 93,
+    /// A whitelisted token with treasury funds cannot be removed (#272).
+    TokenHasBalance = 92,
+    /// A token with active loans cannot be removed (#273).
+    TokenHasActiveLoans = 93,
 }

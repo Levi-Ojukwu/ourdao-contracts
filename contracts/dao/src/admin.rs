@@ -343,7 +343,12 @@ pub fn remove_token(env: &Env, caller: Address, token: Address) -> Result<(), Er
     if !storage::is_token_whitelisted(env, &token) {
         return Err(Error::TokenNotWhitelisted);
     }
-    let proposal_id = storage::get_token_proposal_id(env, &token).unwrap_or(0);
+    if storage::get_active_loans_in_asset(env, &token) > 0 {
+        return Err(Error::TokenHasActiveLoans);
+    }
+    if util::treasury_balance_for(env, &token) > 0 {
+        return Err(Error::TokenHasBalance);
+    }
     storage::set_token_whitelisted(env, &token, false);
     extend_instance(env);
     env.events()
