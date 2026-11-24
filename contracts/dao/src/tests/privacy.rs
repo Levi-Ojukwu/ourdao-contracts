@@ -331,3 +331,89 @@ fn get_commit_reveal_window_rejects_public_proposal() {
         Err(Ok(Error::NotAuthorized)),
     );
 }
+
+// ── expire_treasury_proposal uses the full commit + reveal window (#434) ────
+
+#[test]
+fn private_proposal_cannot_expire_inside_its_reveal_window() {
+    let s = setup(3);
+    let proposer = s.members.get(0).unwrap();
+    let voter = s.members.get(1).unwrap();
+    let destination = Address::generate(&s.env);
+    let reason = String::from_str(&s.env, "private grant");
+    let pid = s
+        .client
+        .propose_treasury_withdrawal(&proposer, &300, &destination, &reason, &true);
+    let (commit_end, reveal_end) = s.client.get_commit_reveal_window(&pid);
+
+    let salt = BytesN::from_array(&s.env, &[5u8; 32]);
+    let commitment = compute_commitment(&s.env, &voter, pid, true, &salt);
+    s.client.commit_treasury_vote(&voter, &pid, &commitment);
+
+    // Past the commit window but inside the reveal window: expiry is refused
+    // and the committed voter can still reveal.
+    s.env.ledger().with_mut(|li| li.timestamp = commit_end + 1);
+    assert_eq!(
+        s.client.try_expire_treasury_proposal(&pid),
+        Err(Ok(Error::NotInVotingPhase)),
+    );
+    assert_eq!(
+        s.client.get_treasury_proposal(&pid).unwrap().status,
+        ProposalStatus::Pending
+    );
+    s.client.reveal_treasury_vote(&voter, &pid, &true, &salt);
+
+    // The last second of the reveal window is still not expirable.
+    s.env.ledger().with_mut(|li| li.timestamp = reveal_end);
+    assert_eq!(
+        s.client.try_expire_treasury_proposal(&pid),
+        Err(Ok(Error::NotInVotingPhase)),
+    );
+}
+
+#[test]
+fn private_proposal_expires_once_the_reveal_window_has_closed() {
+    let s = setup(3);
+    let proposer = s.members.get(0).unwrap();
+    let destination = Address::generate(&s.env);
+    let reason = String::from_str(&s.env, "private grant");
+    let pid = s
+        .client
+        .propose_treasury_withdrawal(&proposer, &300, &destination, &reason, &true);
+    let (_commit_end, reveal_end) = s.client.get_commit_reveal_window(&pid);
+
+    s.env.ledger().with_mut(|li| li.timestamp = reveal_end + 1);
+    s.client.expire_treasury_proposal(&pid);
+    assert_eq!(
+        s.client.get_treasury_proposal(&pid).unwrap().status,
+        ProposalStatus::Expired
+    );
+}
+
+#[test]
+fn public_proposal_still_expires_after_one_voting_period() {
+    let s = setup(3);
+    let proposer = s.members.get(0).unwrap();
+    let destination = Address::generate(&s.env);
+    let reason = String::from_str(&s.env, "open grant");
+    let pid = s
+        .client
+        .propose_treasury_withdrawal(&proposer, &300, &destination, &reason, &false);
+    let created_at = s.client.get_treasury_proposal(&pid).unwrap().created_at;
+
+    s.env
+        .ledger()
+        .with_mut(|li| li.timestamp = created_at + VOTING_PERIOD);
+    assert_eq!(
+        s.client.try_expire_treasury_proposal(&pid),
+        Err(Ok(Error::NotInVotingPhase)),
+    );
+    s.env
+        .ledger()
+        .with_mut(|li| li.timestamp = created_at + VOTING_PERIOD + 1);
+    s.client.expire_treasury_proposal(&pid);
+    assert_eq!(
+        s.client.get_treasury_proposal(&pid).unwrap().status,
+        ProposalStatus::Expired
+    );
+}
