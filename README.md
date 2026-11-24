@@ -259,8 +259,8 @@ Every state-changing call publishes an event, which `ourdao-backend` indexes sin
 | `tre_exp` | `(proposal_id, proposer)` | `expire_treasury_proposal` (permissionless keeper) |
 | `loan_asst` / `tre_asset` | `(id, asset)` | `request_loan_in_asset` / `propose_withdrawal_in_asset`, only when `asset` isn't the base token |
 | `prop_canc` | `(proposal_id, timestamp)` | `cancel_loan_proposal` / `cancel_treasury_proposal` |
-| `tok_prop` | `(caller, token, execution_time)` | `propose_token_addition` |
-| `tok_add` / `tok_rem` | `(caller, token)` | `execute_token_addition` / `remove_token` |
+| `tok_prop` | `(proposal_id, caller, token, execution_time)` | `propose_token_addition` |
+| `tok_add` / `tok_rem` | `(proposal_id, caller, token)` | `execute_token_addition` / `remove_token`; removal reuses the token's original addition proposal id |
 | `staked` / `unstaked` | `(member, amount, new_stake)` | `stake` / `unstake` |
 | `name_reg` | `(name, owner)` | `register_name` |
 | `committed` | `(proposal_id, voter)` | `commit_treasury_vote` |

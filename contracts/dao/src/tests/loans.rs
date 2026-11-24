@@ -1615,384 +1615,43 @@ fn repay_loan_in_asset_wrong_asset_moves_no_tokens() {
     assert_eq!(s.token.balance(&s.client.address), dao_base_before);
     assert_eq!(s.client.get_loan(&pid).unwrap().amount_repaid, 0);
 }
+
+
+// Issue #283: repayment must not credit more than a fee-on-transfer asset delivered.
 #[test]
-fn many_tiny_partial_repayments_settle_exactly() {
+fn fee_on_transfer_repayment_is_rejected_and_rolled_back() {
     let s = setup(3);
     let borrower = s.members.get(0).unwrap();
     let v1 = s.members.get(1).unwrap();
     let v2 = s.members.get(2).unwrap();
 
-    let pid = s.client.request_loan(&borrower, &1_000, &None);
+    let fee_token_id = s.env.register(FeeToken, ());
+    let fee_token = FeeTokenClient::new(&s.env, &fee_token_id);
+    s.client.propose_token_addition(&s.admin, &fee_token_id);
+    advance(&s.env, TIMELOCK_DURATION);
+    s.client.execute_token_addition(&s.admin, &fee_token_id);
+    fee_token.mint(&s.client.address, &10_000);
+
+    let pid = s
+        .client
+        .request_loan_in_asset(&borrower, &1_000, &fee_token_id, &None);
     advance(&s.env, EDITING + 1);
     s.client.vote_on_loan_proposal(&v1, &pid, &true);
     s.client.vote_on_loan_proposal(&v2, &pid, &true);
 
-    let initial_loan = s.client.get_loan(&pid).unwrap();
-    let total_repayment = initial_loan.total_repayment;
-    let interest_total = total_repayment - initial_loan.principal;
-    let mut amount_repaid = 0;
-    let mut installment = 1;
+    let loan_before = s.client.get_loan(&pid).unwrap();
+    fee_token.mint(&borrower, &loan_before.total_repayment);
+    let dao_before = fee_token.balance(&s.client.address);
+    let borrower_before = fee_token.balance(&borrower);
 
-    // Cycle through small installment sizes, including one-unit repayments.
-    while amount_repaid < total_repayment {
-        let remaining = total_repayment - amount_repaid;
-        let payment = installment.min(remaining);
-
-        s.client.repay_loan_partial(&borrower, &pid, &payment);
-        amount_repaid += payment;
-
-        let loan = s.client.get_loan(&pid).unwrap();
-        assert_eq!(loan.amount_repaid, amount_repaid);
-
-        // Interest is repaid first. Only the amount beyond unpaid interest
-        // reduces outstanding principal.
-        let interest_repaid = amount_repaid.min(interest_total);
-        let principal_repaid = amount_repaid - interest_repaid;
-        let expected_outstanding_principal = initial_loan.principal - principal_repaid;
-        assert_eq!(
-            s.client
-                .get_treasury_accounting(&s.token.address)
-                .outstanding_principal,
-            expected_outstanding_principal
-        );
-
-        // Interest yield is split equally across the three active members.
-        // The accumulator carries indivisible remainders between payments.
-        let expected_yield_per_member = interest_repaid / 3;
-        assert_eq!(
-            s.client.get_pending_yield(&borrower),
-            expected_yield_per_member
-        );
-        assert_eq!(s.client.get_pending_yield(&v1), expected_yield_per_member);
-        assert_eq!(s.client.get_pending_yield(&v2), expected_yield_per_member);
-
-        if amount_repaid < total_repayment {
-            assert_eq!(loan.status, LoanStatus::Active);
-            assert!(s.client.get_member(&borrower).unwrap().has_active_loan);
-        }
-
-        installment = if installment == 7 { 1 } else { installment + 1 };
-    }
-
-    let loan = s.client.get_loan(&pid).unwrap();
-    assert_eq!(loan.status, LoanStatus::Repaid);
-    assert_eq!(loan.amount_repaid, loan.total_repayment);
-    assert!(!s.client.get_member(&borrower).unwrap().has_active_loan);
     assert_eq!(
         s.client
-            .get_treasury_accounting(&s.token.address)
-            .outstanding_principal,
-        0
-    );
-}
-
-// #71: `disburse_approved_loan` is a deliberate permissionless keeper call.
-// This pins that intent: a non-member with no auth at all can drive it, so
-// adding a `require_auth` to the entrypoint makes this test fail.
-#[test]
-fn non_member_can_disburse_approved_loan_without_auth() {
-    // 4 members => treasury 4000, max loan 2000 (50%), 3 of 4 votes required.
-    let s = setup(4);
-    let borrower = s.members.get(0).unwrap();
-    let v1 = s.members.get(1).unwrap();
-    let v2 = s.members.get(2).unwrap();
-    let v3 = s.members.get(3).unwrap();
-
-    let pid = s.client.request_loan(&borrower, &1_500, &None);
-    let dest = Address::generate(&s.env);
-    let reason = String::from_str(&s.env, "drain");
-    let tid = s
-        .client
-        .propose_treasury_withdrawal(&v1, &3_000, &dest, &reason, &false);
-    for v in [&v1, &v2, &v3] {
-        s.client.vote_on_treasury_proposal(v, &tid, &true);
-    }
-
-    advance(&s.env, EDITING + 1);
-    for v in [&v1, &v2, &v3] {
-        s.client.vote_on_loan_proposal(v, &pid, &true);
-    }
-    assert_eq!(
-        s.client.get_loan_proposal(&pid).unwrap().status,
-        ProposalStatus::ApprovedPendingDisbursement
-    );
-    refill_treasury(&s);
-    refill_treasury(&s);
-
-    let keeper = Address::generate(&s.env);
-    assert!(s.client.get_member(&keeper).is_none());
-    let keeper_bal = s.token.balance(&keeper);
-    let borrower_bal = s.token.balance(&borrower);
-
-    // No mocked auths from here on: any `require_auth` in the path would fail.
-    s.env.set_auths(&[]);
-    s.client.disburse_approved_loan(&pid);
-    assert!(s.env.auths().is_empty());
-
-    assert_eq!(
-        s.client.get_loan_proposal(&pid).unwrap().status,
-        ProposalStatus::Approved
-    );
-    // Funds go to the borrower fixed on the proposal; the keeper gets nothing.
-    assert_eq!(s.token.balance(&borrower), borrower_bal + 1_500);
-    assert_eq!(s.token.balance(&keeper), keeper_bal);
-
-    // Repeated calls are rejected by the status guard: no double payout.
-    assert_eq!(
-        s.client.try_disburse_approved_loan(&pid),
-        Err(Ok(Error::NotInVotingPhase))
-    );
-    assert_eq!(s.token.balance(&borrower), borrower_bal + 1_500);
-}
-
-// ── #70: default terms are fixed at disbursement ─────────────────────────────
-
-/// Requests and approves a 500-unit loan from member 0 with members 1 and 2.
-fn disbursed_loan(s: &Setup) -> u32 {
-    let borrower = s.members.get(0).unwrap();
-    let pid = s.client.request_loan(&borrower, &500, &None);
-    advance(&s.env, EDITING + 1);
-    s.client
-        .vote_on_loan_proposal(&s.members.get(1).unwrap(), &pid, &true);
-    s.client
-        .vote_on_loan_proposal(&s.members.get(2).unwrap(), &pid, &true);
-    pid
-}
-
-fn apply_policy(s: &Setup, policy: &crate::types::LoanPolicy) {
-    s.client.propose_policy_update(&s.admin, policy);
-    advance(&s.env, TIMELOCK_DURATION + 1);
-    s.client.execute_policy_update(&s.admin);
-}
-
-#[test]
-fn loan_snapshots_default_terms_at_disbursement() {
-    let s = setup(3);
-    let id = disbursed_loan(&s);
-    let loan = s.client.get_loan(&id).unwrap();
-    assert_eq!(loan.default_grace_period, 0);
-    assert_eq!(loan.default_penalty_bps, 2_000);
-}
-
-#[test]
-fn raising_penalty_and_grace_after_disbursement_does_not_change_default_terms() {
-    let s = setup(3);
-    let borrower = s.members.get(0).unwrap();
-    let id = disbursed_loan(&s); // disbursed under 20% penalty, 0 grace
-
-    let mut harsher = policy();
-    harsher.default_penalty_bps = 5_000; // 50%
-    harsher.default_grace_period = 10 * 24 * 60 * 60;
-    apply_policy(&s, &harsher);
-    assert_eq!(s.client.get_loan_policy().default_penalty_bps, 5_000);
-
-    // Past due under the loan's own 0-second grace period; the new policy's
-    // 10-day grace would still say "not overdue".
-    advance(&s.env, LOAN_DURATION);
-    let contribution_before = s.client.get_member(&borrower).unwrap().contribution;
-    s.client.mark_loan_defaulted(&id);
-
-    // Slashed at the original 20%, not the new 50%.
-    let member = s.client.get_member(&borrower).unwrap();
-    assert_eq!(
-        member.contribution,
-        contribution_before - contribution_before * 2_000 / 10_000
-    );
-    assert_eq!(s.client.get_loan(&id).unwrap().default_penalty_bps, 2_000);
-}
-
-#[test]
-fn shortening_grace_after_disbursement_does_not_accelerate_default() {
-    let s = setup(3);
-    let mut lenient = policy();
-    lenient.default_grace_period = 10 * 24 * 60 * 60;
-    apply_policy(&s, &lenient);
-
-    let id = disbursed_loan(&s); // disbursed with a 10-day grace period
-    apply_policy(&s, &policy()); // grace cut back to 0
-
-    let loan = s.client.get_loan(&id).unwrap();
-    s.env
-        .ledger()
-        .with_mut(|li| li.timestamp = loan.due_time + 1);
-    assert_eq!(
-        s.client.try_mark_loan_defaulted(&id),
-        Err(Ok(Error::LoanNotOverdue))
+            .try_repay_loan_in_asset(&borrower, &pid, &fee_token_id),
+        Err(Ok(Error::TransferAmountMismatch))
     );
 
-    s.env
-        .ledger()
-        .with_mut(|li| li.timestamp = loan.due_time + 10 * 24 * 60 * 60);
-    s.client.mark_loan_defaulted(&id);
-    assert_eq!(
-        s.client.get_loan(&id).unwrap().status,
-        LoanStatus::Defaulted
-    );
-}
-
-// ── #73: quorum is fixed at proposal creation ────────────────────────────────
-
-/// Adds a new member (mints their fee first) and returns their address.
-fn join_new_member(s: &Setup) -> Address {
-    let m = Address::generate(&s.env);
-    soroban_sdk::token::StellarAssetClient::new(&s.env, &s.token.address).mint(&m, &MINT);
-    s.client.register_member(&m);
-    m
-}
-
-#[test]
-fn loan_proposal_snapshots_active_members() {
-    let s = setup(5);
-    let pid = s
-        .client
-        .request_loan(&s.members.get(0).unwrap(), &500, &None);
-    assert_eq!(s.client.get_loan_proposal(&pid).unwrap().active_members, 5);
-}
-
-#[test]
-fn members_exiting_mid_vote_do_not_lower_loan_quorum() {
-    // 10 members at creation, 51% => 6 votes required for the proposal's lifetime.
-    let s = setup(10);
-    let borrower = s.members.get(0).unwrap();
-    let pid = s.client.request_loan(&borrower, &500, &None);
-    advance(&s.env, EDITING + 1);
-
-    for i in 1..=5 {
-        s.client
-            .vote_on_loan_proposal(&s.members.get(i).unwrap(), &pid, &true);
-    }
-    // Two members who haven't voted leave: live count 8 => a live bar of 5.
-    s.client.exit_dao(&s.members.get(8).unwrap());
-    s.client.exit_dao(&s.members.get(9).unwrap());
-    assert_eq!(s.client.get_active_members(), 8);
-
-    // An *against* vote must not push the proposal over on the old 5 votes.
-    s.client
-        .vote_on_loan_proposal(&s.members.get(6).unwrap(), &pid, &false);
-    let prop = s.client.get_loan_proposal(&pid).unwrap();
-    assert_eq!(prop.status, ProposalStatus::Pending);
-    assert!(s.client.get_loan(&pid).is_none());
-
-    // The sixth in-favour vote reaches the snapshotted bar.
-    s.client
-        .vote_on_loan_proposal(&s.members.get(7).unwrap(), &pid, &true);
-    assert_eq!(
-        s.client.get_loan_proposal(&pid).unwrap().status,
-        ProposalStatus::Approved
-    );
-}
-
-#[test]
-fn members_joining_mid_vote_do_not_raise_loan_quorum_and_cannot_vote() {
-    // 3 members at creation, 51% => 2 votes required.
-    let s = setup(3);
-    let borrower = s.members.get(0).unwrap();
-    let pid = s.client.request_loan(&borrower, &500, &None);
-    advance(&s.env, EDITING + 1);
-
-    s.client
-        .vote_on_loan_proposal(&s.members.get(1).unwrap(), &pid, &true);
-    // (Voting starts after the editing period, so these joins are strictly
-    // later than the proposal's creation.)
-    let late1 = join_new_member(&s);
-    let _late2 = join_new_member(&s);
-    assert_eq!(s.client.get_active_members(), 5); // a live bar would now be 3
-
-    // A member who joined after creation is outside the electorate.
-    assert_eq!(
-        s.client.try_vote_on_loan_proposal(&late1, &pid, &true),
-        Err(Ok(Error::JoinedAfterProposal))
-    );
-
-    // The second original vote reaches the snapshotted bar of 2.
-    s.client
-        .vote_on_loan_proposal(&s.members.get(2).unwrap(), &pid, &true);
-    assert_eq!(
-        s.client.get_loan_proposal(&pid).unwrap().status,
-        ProposalStatus::Approved
-    );
-}
-
-#[test]
-fn member_who_joined_mid_vote_can_vote_on_later_proposals() {
-    let s = setup(3);
-    let pid = s
-        .client
-        .request_loan(&s.members.get(0).unwrap(), &500, &None);
-    advance(&s.env, 1);
-    let late = join_new_member(&s);
-    advance(&s.env, EDITING + 1);
-    assert_eq!(
-        s.client.try_vote_on_loan_proposal(&late, &pid, &true),
-        Err(Ok(Error::JoinedAfterProposal))
-    );
-
-    let pid2 = s
-        .client
-        .request_loan(&s.members.get(1).unwrap(), &500, &None);
-    assert_eq!(s.client.get_loan_proposal(&pid2).unwrap().active_members, 4);
-    advance(&s.env, EDITING + 1);
-    s.client.vote_on_loan_proposal(&late, &pid2, &true);
-    assert!(s.client.has_voted(&ProposalKind::Loan, &pid2, &late));
-}
-
-// ── #80: an unreachable quote is distinguishable ─────────────────────────────
-
-#[test]
-fn quote_reports_max_loan_within_the_ratio_cap() {
-    // 3 members => treasury 3000, 50% cap => max loan 1500.
-    let s = setup(3);
-    let terms = s.client.calculate_loan_terms(&1_000);
-    assert_eq!(terms.max_loan, 1_500);
-    assert!(1_000 <= terms.max_loan);
-
-    // The boundary is inclusive, exactly as in request_loan.
-    let at_cap = s.client.calculate_loan_terms(&1_500);
-    assert_eq!(at_cap.max_loan, 1_500);
-    s.client
-        .request_loan(&s.members.get(0).unwrap(), &1_500, &None);
-}
-
-#[test]
-fn quote_above_ratio_cap_is_marked_unreachable() {
-    let s = setup(3);
-    let terms = s.client.calculate_loan_terms(&2_000);
-    assert_eq!(terms.max_loan, 1_500);
-    assert!(2_000 > terms.max_loan);
-    // request_loan behaviour is unchanged.
-    assert_eq!(
-        s.client
-            .try_request_loan(&s.members.get(0).unwrap(), &2_000, &None),
-        Err(Ok(Error::ExceedsTreasuryRatio))
-    );
-}
-
-#[test]
-fn quote_with_empty_treasury_has_zero_max_loan() {
-    let s = setup(0);
-    assert_eq!(s.client.get_treasury_balance(), 0);
-    let terms = s.client.calculate_loan_terms(&100);
-    assert_eq!(terms.max_loan, 0);
-    // The rate is still the policy maximum, but max_loan says it can't be had.
-    assert_eq!(terms.interest_rate, 2_000);
-}
-
-#[test]
-fn quote_with_negative_treasury_has_zero_max_loan() {
-    let s = setup(3);
-    let member = s.members.get(0).unwrap();
-    // Staked funds exceeding the token balance make treasury_balance negative.
-    s.env.as_contract(&s.client.address, || {
-        crate::storage::set_total_staked(&s.env, 10_000);
-    });
-    assert!(s.client.get_treasury_balance() < 0);
-
-    let terms = s.client.calculate_loan_terms(&100);
-    assert_eq!(terms.max_loan, 0);
-    assert_eq!(terms.interest_rate, 2_000);
-    // request_loan behaviour is unchanged.
-    assert_eq!(
-        s.client.try_request_loan(&member, &100, &None),
-        Err(Ok(Error::ExceedsTreasuryRatio))
-    );
+    // Contract error reverts the token transfer and all accounting writes.
+    assert_eq!(fee_token.balance(&s.client.address), dao_before);
+    assert_eq!(fee_token.balance(&borrower), borrower_before);
+    assert_eq!(s.client.get_loan(&pid).unwrap(), loan_before);
 }

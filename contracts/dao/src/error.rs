@@ -97,20 +97,8 @@ pub enum Error {
     TooManyOpenProposals = 90,
     /// A borrower cannot vote on their own loan proposal (#327).
     BorrowerCannotVote = 91,
-    /// A whitelisted token with treasury funds cannot be removed (#272).
-    TokenHasBalance = 92,
-    /// The voter joined (or rejoined) the DAO after the proposal was created,
-    /// so they are outside the electorate its quorum was fixed against (#73).
-    JoinedAfterProposal = 93,
-    /// Admin list has reached MAX_ADMINS; remove one before adding another (#68).
-    TooManyAdmins = 94,
-    /// Reserved: never returned (added in 4bb9153 for #67). Admin removal
-    /// enforces the removed admin's co-signature with `require_auth`, which
-    /// aborts instead of returning this code. Kept because codes are
-    /// append-only public ABI (#252).
-    NotAdmin2 = 95,
-    /// Batch vote call exceeded the maximum number of votes allowed per call.
-    TooManyVotesInBatch = 96,
-    /// Checked `i128` arithmetic overflowed; the operation was rejected.
-    ArithmeticOverflow = 97,
+    /// The treasury asset whitelist has reached its bounded maximum (#282).
+    WhitelistFull = 92,
+    /// An inbound token transfer delivered less than the requested amount (#283).
+    TransferAmountMismatch = 93,
 }

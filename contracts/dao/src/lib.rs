@@ -34,7 +34,7 @@ mod tests;
 #[cfg(all(test, feature = "bench-budget"))]
 mod bench;
 
-use soroban_sdk::{contract, contractimpl, Address, Bytes, BytesN, Env, String, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Bytes, BytesN, Env, Map, String, Vec};
 use types::{
     AssetBalance, DaoSummary, SeedDocEntry, SeedNameEntry, SeedStakeEntry, SeedYieldEntry,
     TreasuryAccounting,
@@ -608,7 +608,21 @@ impl OurDao {
         })
     }
 
-    /// Returns the lifetime number of addresses that have joined the DAO.
+    /// Returns every accepted treasury asset and its current contract balance.
+    ///
+    /// The base token is always included first by `get_whitelisted_tokens`,
+    /// followed by every currently whitelisted extra asset.
+    pub fn get_treasury_balances(env: Env) -> Map<Address, i128> {
+        let mut balances = Map::new(&env);
+        for asset in storage::get_whitelisted_tokens(&env).iter() {
+            balances.set(
+                asset.clone(),
+                util::treasury_balance_in_asset(&env, &asset),
+            );
+        }
+        balances
+    }
+
     pub fn get_total_members(env: Env) -> u32 {
         storage::get_total_members(&env)
     }
