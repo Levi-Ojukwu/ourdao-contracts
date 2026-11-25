@@ -513,3 +513,49 @@ fn membership_fee_ignores_whitelisted_non_base_assets() {
     assert_eq!(s.token.balance(&member), base_before - FEE);
     assert_eq!(second.balance(&member), second_before);
 }
+
+// Issue #168: a defaulting borrower can't exit and rejoin to reset their debt.
+#[test]
+fn defaulted_borrower_cannot_rejoin_after_exit() {
+    let s = setup(3);
+    let a = s.members.get(0).unwrap();
+    let b = s.members.get(1).unwrap();
+    let c = s.members.get(2).unwrap();
+
+    let pid = s.client.request_loan(&a, &500, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&b, &pid, &true);
+    s.client.vote_on_loan_proposal(&c, &pid, &true);
+
+    advance(&s.env, LOAN_DURATION + 1);
+    s.client.mark_loan_defaulted(&pid);
+
+    s.client.exit_dao(&a);
+    assert!(!s.client.is_member(&a));
+
+    assert_eq!(
+        s.client.try_register_member(&a),
+        Err(Ok(Error::DefaultedLoanOutstanding))
+    );
+    assert!(!s.client.is_member(&a));
+    assert_eq!(s.client.get_active_members(), 2);
+}
+
+// Issue #168: a borrower who repaid in full may still exit and rejoin.
+#[test]
+fn repaid_borrower_can_rejoin_after_exit() {
+    let s = setup(3);
+    let a = s.members.get(0).unwrap();
+    let b = s.members.get(1).unwrap();
+    let c = s.members.get(2).unwrap();
+
+    let pid = s.client.request_loan(&a, &500, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&b, &pid, &true);
+    s.client.vote_on_loan_proposal(&c, &pid, &true);
+    s.client.repay_loan(&a, &pid);
+
+    s.client.exit_dao(&a);
+    s.client.register_member(&a);
+    assert!(s.client.is_member(&a));
+}

@@ -1228,7 +1228,6 @@ fn removed_token_balance_reporting() {
     // get_treasury_balance_in_asset reports the token balance accurately
     assert_eq!(s.client.get_treasury_balance_in_asset(&other_token), 0);
 }
-}
 
 
 // Issue #282: the whitelist is bounded so views and exit-basket iteration stay affordable.
@@ -1310,3 +1309,4 @@ fn token_add_and_remove_events_include_proposal_id_and_caller() {
     assert_eq!(remove_data[0], ScVal::U32(0));
     assert!(matches!(&remove_data[1], ScVal::Address(_)));
     assert!(matches!(&remove_data[2], ScVal::Address(_)));
+}

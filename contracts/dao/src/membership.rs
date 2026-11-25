@@ -22,6 +22,12 @@ pub fn register_member(env: &Env, member: Address) -> Result<(), Error> {
         if record.status == MemberStatus::ActiveMember {
             return Err(Error::AlreadyMember);
         }
+        // A returning borrower must not use exit + rejoin to wipe out unpaid
+        // debt (#168). Defaults are terminal and never repaid, so any loan
+        // that is neither repaid nor still active is a default on record.
+        if record_has_unresolved_debt(record) {
+            return Err(Error::DefaultedLoanOutstanding);
+        }
     }
 
     let fee = storage::get_membership_fee(env)?;
@@ -70,6 +76,14 @@ pub fn register_member(env: &Env, member: Address) -> Result<(), Error> {
     env.events()
         .publish((crate::events::JOINED,), (member, fee));
     Ok(())
+}
+
+/// Whether a (former) member still owes the treasury: a loan flagged active,
+/// or a lifetime loan count that exceeds repaid + outstanding loans, which
+/// means at least one loan was marked defaulted (#168).
+fn record_has_unresolved_debt(record: &Member) -> bool {
+    let settled = record.repaid_loans.saturating_add(record.active_loans);
+    record.has_active_loan || record.active_loans > 0 || record.total_loans > settled
 }
 
 #[allow(deprecated)]
