@@ -349,6 +349,8 @@ Numeric codes are stable and part of the ABI — new variants get appended rathe
 | 90 | `TooManyOpenProposals` |
 | 91 | `BorrowerCannotVote` |
 | 92 | `TokenHasBalance` |
+| 93 | `TokenHasActiveLoans` |
+| 94 | `DefaultedLoanOutstanding` |
 
 ## Build & test
 

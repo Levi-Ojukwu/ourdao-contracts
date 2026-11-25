@@ -858,3 +858,22 @@ fn error_borrower_cannot_vote() {
         .try_vote_on_loan_proposal(&borrower, &proposal_id, &true);
     assert_eq!(result, Err(Ok(Error::BorrowerCannotVote)));
 }
+
+// DefaultedLoanOutstanding = 94
+#[test]
+fn error_defaulted_loan_outstanding() {
+    let s = setup(3);
+    let borrower = s.members.get(0).unwrap();
+    let v1 = s.members.get(1).unwrap();
+    let v2 = s.members.get(2).unwrap();
+    let proposal_id = s.client.request_loan(&borrower, &500, &None);
+    advance(&s.env, EDITING + 1);
+    s.client.vote_on_loan_proposal(&v1, &proposal_id, &true);
+    s.client.vote_on_loan_proposal(&v2, &proposal_id, &true);
+    advance(&s.env, LOAN_DURATION + 1);
+    s.client.mark_loan_defaulted(&proposal_id);
+    s.client.exit_dao(&borrower);
+
+    let result = s.client.try_register_member(&borrower);
+    assert_eq!(result, Err(Ok(Error::DefaultedLoanOutstanding)));
+}

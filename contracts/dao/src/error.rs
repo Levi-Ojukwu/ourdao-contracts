@@ -101,4 +101,7 @@ pub enum Error {
     TokenHasBalance = 92,
     /// A token with active loans cannot be removed (#273).
     TokenHasActiveLoans = 93,
+    /// A returning member still has a loan outstanding or a defaulted loan on
+    /// record, so they may not rejoin and reset their standing (#168).
+    DefaultedLoanOutstanding = 94,
 }
