@@ -5,6 +5,7 @@ All notable changes to `ourdao-contracts` are documented here. The format follow
 ## [Unreleased]
 
 ### Added
+- `release_name(owner)` lets a member give up their registered name without claiming a replacement or exiting the DAO. It requires `owner` auth, is pause-gated, emits the existing `name_rel` event, and returns `NameNotFound` (61, previously reserved and never returned) when `owner` holds no name (#458).
 - Regression tests pinning `expire_treasury_proposal` to literal deadlines: a private proposal is not expirable anywhere in `(voting_period, voting_period * 2]` and expires after `voting_period * 2`, while a public proposal still expires after one `voting_period` (#456).
 
 ### Fixed

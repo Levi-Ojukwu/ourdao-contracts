@@ -344,6 +344,10 @@ fn pause_blocks_all_mutating_entrypoints_except_repay() {
             ),
         },
         EntryPoint {
+            name: "release_name",
+            blocked: matches!(s.client.try_release_name(&borrower), Err(Ok(Error::Paused))),
+        },
+        EntryPoint {
             name: "commit_treasury_vote",
             blocked: matches!(
                 s.client.try_commit_treasury_vote(
@@ -592,6 +596,13 @@ fn pause_blocks_all_mutating_entrypoints() {
         res,
         Err(Ok(Error::Paused)),
         "register_name should be pause-gated"
+    );
+
+    let res = s.client.try_release_name(&borrower);
+    assert_eq!(
+        res,
+        Err(Ok(Error::Paused)),
+        "release_name should be pause-gated"
     );
 
     // ==================== Privacy (commit-reveal voting) ====================
